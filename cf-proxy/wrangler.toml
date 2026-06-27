@@ -1,0 +1,8 @@
+name = "radical-movies-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[routes]]
+pattern = "movies.theradicalparty.com"
+zone_name = "theradicalparty.com"
+custom_domain = true
