@@ -2,6 +2,21 @@ const IMG = 'https://image.tmdb.org/t/p';
 const POSTER = (p) => p ? `${IMG}/w342${p}` : '/no-poster.svg';
 const BACKDROP = (b) => b ? `${IMG}/w1280${b}` : '';
 
+// TMDB direct browser calls (bypasses server IP restrictions)
+const TMDB_KEY = '0330d4c885535dbcbfc3a1085e098571';
+const TMDB = 'https://api.themoviedb.org/3';
+const tmdbHeaders = {
+  Authorization: `Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIwMzMwZDRjODg1NTM1ZGJjYmZjM2ExMDg1ZTA5ODU3MSIsIm5iZiI6MTc4MjU3NzkzNC45MTgwMDAyLCJzdWIiOiI2YTNmZmIwZTg5YzkzZGQwNzY5ZjNmOWIiLCJzY29wZXMiOlsiYXBpX3JlYWQiXSwidmVyc2lvbiI6MX0.t2IbUYP_18EI_9IxzPLhVDP7jUCKTTBeRXbZmFFfOgQ`,
+};
+
+async function tmdb(path, params = {}) {
+  const url = new URL(`${TMDB}${path}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url, { headers: tmdbHeaders });
+  if (!res.ok) throw new Error(`TMDB ${res.status}`);
+  return res.json();
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 let heroMovies = [];
 let heroIdx = 0;
@@ -51,7 +66,8 @@ const videoEl      = $('videoEl');
 
 // ── Socket setup ───────────────────────────────────────────────────────────
 function initSocket() {
-  socket = io();
+  // Use polling as primary transport — works reliably through Cloudflare Worker proxy
+  socket = io({ transports: ['polling', 'websocket'] });
 
   socket.on('job:update', (job) => {
     if (job.id !== currentJobId) return;
@@ -89,14 +105,14 @@ async function init() {
 async function loadAll() {
   const [trending, popular, topRated, nowPlaying, action, scifi, drama, comedy] =
     await Promise.allSettled([
-      api('/api/movies/trending'),
-      api('/api/movies/popular'),
-      api('/api/movies/top-rated'),
-      api('/api/movies/now-playing'),
-      api('/api/movies/genre/28'),
-      api('/api/movies/genre/878'),
-      api('/api/movies/genre/18'),
-      api('/api/movies/genre/35'),
+      tmdb('/trending/movie/week'),
+      tmdb('/movie/popular'),
+      tmdb('/movie/top_rated'),
+      tmdb('/movie/now_playing'),
+      tmdb('/discover/movie', { with_genres: 28, sort_by: 'popularity.desc' }),
+      tmdb('/discover/movie', { with_genres: 878, sort_by: 'popularity.desc' }),
+      tmdb('/discover/movie', { with_genres: 18, sort_by: 'popularity.desc' }),
+      tmdb('/discover/movie', { with_genres: 35, sort_by: 'popularity.desc' }),
     ]);
 
   const get = (r) => (r.status === 'fulfilled' ? r.value.results ?? [] : []);
@@ -172,7 +188,7 @@ let currentMovie = null;
 
 async function openModal(tmdbId) {
   try {
-    const m = await api(`/api/movies/${tmdbId}`);
+    const m = await tmdb(`/movie/${tmdbId}`, { append_to_response: 'credits,videos,similar' });
     currentMovie = m;
 
     modalHero.style.backgroundImage = BACKDROP(m.backdrop_path)
@@ -403,7 +419,7 @@ async function doSearch(q) {
   searchGrid.innerHTML = '';
 
   try {
-    const data = await api(`/api/movies/search?q=${encodeURIComponent(q)}`);
+    const data = await tmdb('/search/movie', { query: q });
     const movies = data.results ?? [];
     if (!movies.length) {
       searchGrid.innerHTML = '<p style="color:#777;padding:20px 0">No results found.</p>';
