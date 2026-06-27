@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Radical Movies</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav class="nav" id="nav">
+    <a class="nav-logo" href="/">RADICAL</a>
+    <div class="nav-links">
+      <span class="nav-link active" data-section="home">Home</span>
+      <span class="nav-link" data-section="popular">Popular</span>
+      <span class="nav-link" data-section="top-rated">Top Rated</span>
+      <span class="nav-link" data-section="now-playing">Now Playing</span>
+    </div>
+    <div class="nav-right">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-input" id="searchInput" type="text" placeholder="Search movies…" autocomplete="off">
+        <button class="search-clear" id="searchClear" hidden>✕</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero" id="hero">
+    <div class="hero-bg" id="heroBg"></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-content" id="heroContent">
+      <div class="hero-badge">Trending</div>
+      <h1 class="hero-title" id="heroTitle">Loading…</h1>
+      <p class="hero-meta" id="heroMeta"></p>
+      <p class="hero-desc" id="heroDesc"></p>
+      <div class="hero-actions">
+        <button class="btn btn-watch" id="heroWatch">▶  Watch Now</button>
+        <button class="btn btn-info" id="heroInfo">ℹ  More Info</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAIN CONTENT -->
+  <main class="main" id="main">
+
+    <!-- Search Results (hidden by default) -->
+    <section class="search-results" id="searchResults" hidden>
+      <h2 class="row-title" id="searchHeading">Results</h2>
+      <div class="grid" id="searchGrid"></div>
+    </section>
+
+    <!-- Movie Rows -->
+    <div id="rows">
+      <section class="row">
+        <h2 class="row-title">Trending This Week</h2>
+        <div class="row-track" id="rowTrending"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Popular Movies</h2>
+        <div class="row-track" id="rowPopular"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Top Rated</h2>
+        <div class="row-track" id="rowTopRated"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Now Playing</h2>
+        <div class="row-track" id="rowNowPlaying"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Action &amp; Adventure</h2>
+        <div class="row-track" id="rowAction"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Sci-Fi</h2>
+        <div class="row-track" id="rowScifi"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Drama</h2>
+        <div class="row-track" id="rowDrama"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Comedy</h2>
+        <div class="row-track" id="rowComedy"></div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- MOVIE DETAIL MODAL -->
+  <div class="modal-wrap" id="modalWrap" hidden>
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal" id="modal">
+      <button class="modal-close" id="modalClose">✕</button>
+      <div class="modal-hero" id="modalHero"></div>
+      <div class="modal-body">
+        <div class="modal-left">
+          <h2 class="modal-title" id="modalTitle"></h2>
+          <div class="modal-meta" id="modalMeta"></div>
+          <p class="modal-overview" id="modalOverview"></p>
+        </div>
+        <div class="modal-right" id="modalRight"></div>
+      </div>
+      <div class="modal-actions" id="modalActions">
+        <button class="btn btn-watch btn-lg" id="modalWatch">▶  Watch Now</button>
+      </div>
+      <div class="modal-similar" id="modalSimilar"></div>
+    </div>
+  </div>
+
+  <!-- DOWNLOAD / COUNTDOWN OVERLAY -->
+  <div class="fetch-overlay" id="fetchOverlay" hidden>
+    <div class="fetch-box">
+      <button class="fetch-close" id="fetchClose">✕</button>
+      <div class="fetch-title" id="fetchTitle"></div>
+
+      <div class="countdown-ring">
+        <svg class="ring-svg" viewBox="0 0 120 120">
+          <circle class="ring-bg" cx="60" cy="60" r="54"/>
+          <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="54"
+            stroke-dasharray="339.3" stroke-dashoffset="0"/>
+        </svg>
+        <div class="countdown-time" id="countdownTime">6:00</div>
+      </div>
+
+      <div class="fetch-status" id="fetchStatus">Initialising…</div>
+
+      <div class="progress-wrap" id="progressWrap" hidden>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-info" id="progressInfo"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIDEO PLAYER OVERLAY -->
+  <div class="player-overlay" id="playerOverlay" hidden>
+    <div class="player-topbar">
+      <span class="player-movie-title" id="playerTitle"></span>
+      <button class="player-close" id="playerClose">✕</button>
+    </div>
+    <video class="player-video" id="videoEl" controls playsinline></video>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
