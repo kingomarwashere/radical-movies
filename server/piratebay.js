@@ -9,6 +9,17 @@ function magnet(hash, name) {
   return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${TRACKERS}`;
 }
 
+// Prefer web-rip MP4 releases; treat MKV remux as last resort
+function tpbFormatScore(name) {
+  const n = name.toLowerCase();
+  if (n.includes('webrip') || n.includes('web-rip') || n.includes('web.rip')) return 0;
+  if (n.includes('web-dl') || n.includes('webdl'))  return 0;
+  if (n.includes('amzn') || n.includes('nflx') || n.includes('dsnp')) return 0; // streaming sources
+  if (n.includes('bluray') || n.includes('blu-ray') || n.includes('bdrip')) return 1;
+  if (n.includes('remux')) return 2; // huge files, always MKV
+  return 1;
+}
+
 export async function searchTPB(title, year) {
   const query = `${title} ${year ?? ''} 1080p`.trim();
   const url = `https://apibay.org/q.php?q=${encodeURIComponent(query)}&cat=207`;
@@ -30,7 +41,11 @@ export async function searchTPB(title, year) {
         && !n.includes('cam') && !n.includes('hdcam')
         && !n.includes('.ts.') && !n.includes('3d');
     })
-    .sort((a, b) => parseInt(b.seeders) - parseInt(a.seeders));
+    .sort((a, b) => {
+      const fDiff = tpbFormatScore(a.name) - tpbFormatScore(b.name);
+      if (fDiff !== 0) return fDiff;
+      return parseInt(b.seeders) - parseInt(a.seeders);
+    });
 
   if (!valid.length) return null;
 

@@ -11,7 +11,7 @@ import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB } from './piratebay.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
-import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt } from './transcoder.js';
+import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getSignedStreamUrl, r2Configured } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -158,19 +158,23 @@ async function runPipeline(jobId) {
 
   emit({ status: 'processing', progress: 100, message: 'Processing video file…' });
 
-  // 3. Transcode if needed
+  // 3. Process / transcode only if needed
   const rawPath = job._rawPath;
   let finalPath = rawPath;
-  const ext = getExt(rawPath);
   const ffmpegOk = await isFfmpegAvailable().catch(() => false);
 
   if (ffmpegOk) {
     const outPath = rawPath.replace(/\.[^.]+$/, '_web.mp4');
-    emit({ message: ext === '.mp4' ? 'Optimising MP4 for streaming…' : 'Transcoding to MP4…' });
-    finalPath = ext === '.mp4'
-      ? await fastStartMP4(rawPath, outPath)
-      : await transcodeToMP4(rawPath, outPath);
-  } else if (ext !== '.mp4') {
+    if (needsTranscode(rawPath)) {
+      // MKV, AVI, etc — transcode to MP4 (stream-copy video first, re-encode audio)
+      emit({ message: 'Transcoding to web MP4…' });
+      finalPath = await transcodeToMP4(rawPath, outPath);
+    } else if (getExt(rawPath) === '.mp4') {
+      // Already MP4 — just add faststart moov atom for instant browser streaming
+      emit({ message: 'Optimising MP4 for streaming…' });
+      finalPath = await fastStartMP4(rawPath, outPath);
+    }
+  } else if (needsTranscode(rawPath)) {
     console.warn('[warn] ffmpeg not found — serving original file (may not play in browser)');
   }
 

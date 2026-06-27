@@ -1,13 +1,19 @@
 import 'dotenv/config';
 
-const KEY = process.env.TMDB_API_KEY;
+const TOKEN = process.env.TMDB_READ_TOKEN || process.env.TMDB_API_KEY;
+const USE_BEARER = TOKEN && TOKEN.length > 40; // read access tokens are JWTs
 const BASE = 'https://api.themoviedb.org/3';
 
 async function get(path, params = {}) {
   const url = new URL(`${BASE}${path}`);
-  url.searchParams.set('api_key', KEY);
+  const headers = {};
+  if (USE_BEARER) {
+    headers['Authorization'] = `Bearer ${TOKEN}`;
+  } else {
+    url.searchParams.set('api_key', TOKEN);
+  }
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const res = await fetch(url);
+  const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`TMDB ${res.status}: ${path}`);
   return res.json();
 }

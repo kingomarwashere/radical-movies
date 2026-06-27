@@ -14,6 +14,15 @@ function magnet(hash, name) {
   return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${TRACKERS}`;
 }
 
+// Format score: lower = prefer (web MP4 first, MKV remux last)
+function formatScore(type = '') {
+  const t = type.toLowerCase();
+  if (t === 'web') return 0;       // WEBRip / WEB-DL — MP4, browser-native
+  if (t === 'bluray') return 1;    // BluRay encode — often MKV, needs transcode
+  if (t === 'hdts') return 2;      // HD telecine — avoid
+  return 3;
+}
+
 export async function searchYTS(title, year) {
   const query = year ? `${title} ${year}` : title;
   const url = `${YTS}/list_movies.json?query_term=${encodeURIComponent(query)}&sort_by=seeds&order_by=desc&limit=10`;
@@ -32,8 +41,13 @@ export async function searchYTS(title, year) {
     const torrents = (movie.torrents ?? [])
       .filter(t => ['1080p', '720p'].includes(t.quality))
       .sort((a, b) => {
+        // 1. Prefer web (MP4) over bluray (MKV)
+        const fDiff = formatScore(a.type) - formatScore(b.type);
+        if (fDiff !== 0) return fDiff;
+        // 2. Prefer 1080p
         if (a.quality === '1080p' && b.quality !== '1080p') return -1;
         if (b.quality === '1080p' && a.quality !== '1080p') return 1;
+        // 3. Most seeds
         return b.seeds - a.seeds;
       });
 
@@ -45,6 +59,7 @@ export async function searchYTS(title, year) {
       title: movie.title,
       year: movie.year,
       quality: best.quality,
+      type: best.type,
       size: best.size,
       seeds: best.seeds,
       hash: best.hash,
