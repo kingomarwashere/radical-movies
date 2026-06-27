@@ -1,46 +1,48 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
+import path from 'path';
 
-export const r2Configured = !!(
-  process.env.R2_ACCOUNT_ID &&
-  process.env.R2_ACCESS_KEY_ID &&
-  process.env.R2_SECRET_ACCESS_KEY
-);
+const ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
+const BUCKET     = process.env.R2_BUCKET_NAME || 'radical-movies-storage';
+const CF_TOKEN   = process.env.CF_API_TOKEN;
+const STREAM_URL = process.env.R2_STREAM_URL || 'https://radical-movies-r2.omar-c29.workers.dev';
 
-const BUCKET = process.env.R2_BUCKET_NAME || 'radical-movies-storage';
+const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects`;
 
-let s3 = null;
-if (r2Configured) {
-  s3 = new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    },
-  });
-}
+export const r2Configured = !!(ACCOUNT_ID && CF_TOKEN);
 
 export async function uploadToR2(localPath, key) {
-  if (!s3) throw new Error('R2 not configured');
+  if (!r2Configured) throw new Error('R2 not configured');
 
+  const stat = fs.statSync(localPath);
   const body = fs.createReadStream(localPath);
-  const size = fs.statSync(localPath).size;
 
-  await s3.send(new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-    Body: body,
-    ContentLength: size,
-    ContentType: 'video/mp4',
-  }));
+  const res = await fetch(`${CF_R2_BASE}/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${CF_TOKEN}`,
+      'Content-Type': 'video/mp4',
+      'Content-Length': String(stat.size),
+    },
+    body,
+    duplex: 'half',
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`R2 upload failed ${res.status}: ${err}`);
+  }
 
   return key;
 }
 
-export async function getSignedStreamUrl(key) {
-  if (!s3) return null;
-  const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: key });
-  return getSignedUrl(s3, cmd, { expiresIn: 86400 });
+export function getStreamUrl(key) {
+  return `${STREAM_URL}/${encodeURIComponent(key)}`;
+}
+
+export async function deleteFromR2(key) {
+  if (!r2Configured) return;
+  await fetch(`${CF_R2_BASE}/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${CF_TOKEN}` },
+  });
 }

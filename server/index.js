@@ -12,7 +12,7 @@ import { searchYTS } from './yts.js';
 import { searchTPB } from './piratebay.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
-import { uploadToR2, getSignedStreamUrl, r2Configured } from './r2.js';
+import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -187,8 +187,9 @@ async function runPipeline(jobId) {
     emit({ status: 'uploading', message: 'Uploading to Cloudflare R2…' });
     const key = `movies/${jobId}/${path.basename(finalPath)}`;
     await uploadToR2(finalPath, key);
-    const signed = await getSignedStreamUrl(key);
-    if (signed) streamUrl = signed;
+    streamUrl = getStreamUrl(key);
+    // Clean up local file after successful R2 upload to save VM disk space
+    fs.unlink(finalPath, () => {});
   }
 
   // 5. Done
