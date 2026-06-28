@@ -43,6 +43,26 @@ app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')
 const jobs          = new Map(); // jobId → job
 const activeStreams  = new Map(); // streamId → { jobId, title, ip, startedAt, bytesSent }
 
+// ── Job persistence ─────────────────────────────────────────────────────────
+const JOBS_FILE = path.join(__dirname, '..', 'jobs.json');
+
+function saveJobs() {
+  const out = {};
+  for (const [id, job] of jobs) {
+    if (job.status === 'ready' || job.status === 'error') out[id] = sanitize(job);
+  }
+  try { fs.writeFileSync(JOBS_FILE, JSON.stringify(out)); } catch {}
+}
+
+(function loadJobs() {
+  try {
+    if (!fs.existsSync(JOBS_FILE)) return;
+    const saved = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
+    for (const [id, job] of Object.entries(saved)) jobs.set(id, job);
+    console.log(`[jobs] restored ${Object.keys(saved).length} jobs from disk`);
+  } catch (e) { console.error('[jobs] load failed:', e.message); }
+})();
+
 // ── TMDB routes ────────────────────────────────────────────────────────────
 const wrap = (fn) => (req, res) =>
   fn(req).then(d => res.json(d)).catch(e => res.status(500).json({ error: e.message }));
@@ -59,6 +79,21 @@ app.get('/api/movies/:id', wrap((req) => tmdb.getMovie(req.params.id)));
 app.post('/api/watch', async (req, res) => {
   const { tmdbId, title, year } = req.body;
   if (!title) return res.status(400).json({ error: 'title required' });
+
+  // Dedup: return existing job if we already have this movie
+  for (const [id, job] of jobs) {
+    const match = (tmdbId && job.tmdbId === tmdbId) ||
+                  (job.title?.toLowerCase() === title?.toLowerCase() && String(job.year) === String(year));
+    if (!match) continue;
+    if (job.status === 'ready' && job.streamUrl) {
+      console.log(`[pipeline] serving cached: ${title} (${year})`);
+      return res.json({ jobId: id, streamUrl: job.streamUrl, ready: true });
+    }
+    if (['searching', 'downloading', 'uploading'].includes(job.status)) {
+      console.log(`[pipeline] reusing in-progress job: ${id}`);
+      return res.json({ jobId: id });
+    }
+  }
 
   const jobId = randomUUID();
   jobs.set(jobId, {
@@ -80,6 +115,7 @@ app.post('/api/watch', async (req, res) => {
       j.status = 'error';
       j.error = msg;
       j.message = `Error: ${msg}`;
+      saveJobs();
     }
     io.to(jobId).emit('job:error', { jobId, error: err.message });
     io.to(jobId).emit('job:update', j ? sanitize(j) : { id: jobId, status: 'error', error: err.message });
@@ -157,6 +193,7 @@ app.delete('/api/admin/job/:jobId', (req, res) => {
   // Clean up local file if present
   if (job.localPath && fs.existsSync(job.localPath)) fs.unlink(job.localPath, () => {});
   jobs.delete(id);
+  saveJobs();
   broadcastAdmin();
   res.json({ ok: true });
 });
@@ -334,6 +371,7 @@ async function runPipeline(jobId) {
       if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
       job.streamUrl = getStreamUrl(r2Key);
+      saveJobs();
       io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
       io.to(jobId).emit('job:update', sanitize(job));
       return;
@@ -407,6 +445,7 @@ async function runPipeline(jobId) {
   // 5. Done
   job.status = 'ready';
   job.streamUrl = streamUrl;
+  saveJobs();
   io.to(jobId).emit('job:ready', { jobId, streamUrl, title: job.title });
   io.to(jobId).emit('job:update', sanitize(job));
 }

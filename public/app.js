@@ -276,13 +276,20 @@ async function startWatch(movie) {
   startCountdown(360);
 
   try {
-    const { jobId } = await fetch('/api/watch', {
+    const { jobId, streamUrl, ready } = await fetch('/api/watch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tmdbId: movie.id, title, year }),
     }).then(r => r.json());
 
     currentJobId = jobId;
+
+    if (ready && streamUrl) {
+      // Already in R2 — open immediately, no download needed
+      openPlayer(streamUrl, title);
+      return;
+    }
+
     socket.emit('watch:join', jobId);
   } catch (e) {
     stopCountdown();
