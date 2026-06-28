@@ -18,8 +18,8 @@ const SESSION_TTL = 3 * 60 * 60 * 1000; // 3 hours
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 async function _doLogin() {
-  // Use redirect:'manual' so we capture Set-Cookie from the 302 response.
-  // Following the redirect discards the intermediate Set-Cookie headers.
+  // redirect:'manual' so all Set-Cookie headers from the 302 are visible —
+  // following the redirect discards intermediate cookies.
   const res = await fetch(`${TL_BASE}/user/account/login/`, {
     method: 'POST',
     headers: {
@@ -32,19 +32,28 @@ async function _doLogin() {
     redirect: 'manual',
   });
 
-  // Successful login → 302 with Set-Cookie: PHPSESSID=...
-  const cookieHeader = res.headers.get('set-cookie') || '';
-  const sid = cookieHeader.match(/PHPSESSID=([^;,\s]+)/)?.[1];
+  // TL sets PHPSESSID + tluid + tlpass — capture ALL of them.
+  // Node 18+ provides getSetCookie() returning an array; fall back to splitting
+  // the combined set-cookie string for older environments.
+  const rawCookies = res.headers.getSetCookie?.()
+    ?? (res.headers.get('set-cookie') || '').split(/,\s*(?=[A-Za-z_-]+=)/).filter(Boolean);
 
-  if (!sid) {
+  const jar = {};
+  for (const sc of rawCookies) {
+    const nameVal = sc.split(';')[0].trim();
+    const eq = nameVal.indexOf('=');
+    if (eq > 0) jar[nameVal.slice(0, eq)] = nameVal.slice(eq + 1);
+  }
+
+  if (!jar.PHPSESSID) {
     const body = await res.text().catch(() => '');
     const hint = body.includes('Invalid') ? 'Invalid credentials' : `status ${res.status}`;
     throw new Error(`TorrentLeech login failed: ${hint}`);
   }
 
-  _cookie  = `PHPSESSID=${sid}`;
+  _cookie  = Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
   _loginAt = Date.now();
-  console.log('[tl] session established:', _cookie.slice(0, 30));
+  console.log('[tl] session established, cookies:', Object.keys(jar).join(', '));
 }
 
 // Serialise logins — concurrent callers share one in-flight promise
