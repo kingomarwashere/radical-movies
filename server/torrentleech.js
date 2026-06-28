@@ -129,23 +129,29 @@ export async function searchTL(title, year) {
   const results = data?.torrentList || [];
   if (!results.length) return null;
 
-  // Filter and rank
-  const valid = results
-    .filter(t => {
-      const n = t.name.toLowerCase();
-      const score = qualScore(t.name);
-      return score >= 0 && (n.includes('1080p') || n.includes('720p'));
-    })
-    .sort((a, b) => {
-      const qDiff = qualScore(b.name) - qualScore(a.name);
-      if (qDiff !== 0) return qDiff;
-      // Prefer 1080p
-      const a1080 = a.name.toLowerCase().includes('1080p');
-      const b1080 = b.name.toLowerCase().includes('1080p');
-      if (a1080 && !b1080) return -1;
-      if (b1080 && !a1080) return 1;
-      return (b.seeders || 0) - (a.seeders || 0);
-    });
+  const MAX_SIZE = 6 * 1024 * 1024 * 1024; // 6 GB cap
+
+  const baseFilter = (t) => {
+    const n = t.name.toLowerCase();
+    return qualScore(t.name) >= 0 && (n.includes('1080p') || n.includes('720p'));
+  };
+
+  const rank = (a, b) => {
+    const qDiff = qualScore(b.name) - qualScore(a.name);
+    if (qDiff !== 0) return qDiff;
+    const a1080 = a.name.toLowerCase().includes('1080p');
+    const b1080 = b.name.toLowerCase().includes('1080p');
+    if (a1080 && !b1080) return -1;
+    if (b1080 && !a1080) return 1;
+    return (b.seeders || 0) - (a.seeders || 0);
+  };
+
+  // Prefer results under 6 GB; fall back to smallest available if nothing fits
+  let valid = results.filter(t => baseFilter(t) && parseInt(t.size || 0) <= MAX_SIZE).sort(rank);
+  if (!valid.length) {
+    valid = results.filter(baseFilter).sort((a, b) => parseInt(a.size || 0) - parseInt(b.size || 0));
+    if (valid.length) console.log(`[tl] no results under 6 GB, using smallest: ${(parseInt(valid[0].size)/1e9).toFixed(1)} GB`);
+  }
 
   if (!valid.length) return null;
 
