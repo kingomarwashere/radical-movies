@@ -29,21 +29,25 @@ function formatScore(type = '') {
   return 3;
 }
 
-export async function searchYTS(title, year) {
-  const query = year ? `${title} ${year}` : title;
-  const url = `${YTS}/list_movies.json?query_term=${encodeURIComponent(query)}&sort_by=seeds&order_by=desc&limit=10`;
-
-  let data;
+async function ytsQuery(query) {
   try {
+    const url = `${YTS}/list_movies.json?query_term=${encodeURIComponent(query)}&sort_by=seeds&order_by=desc&limit=10`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    data = await res.json();
-  } catch {
-    return null;
-  }
+    const data = await res.json();
+    return data.status === 'ok' && data.data?.movie_count ? data.data.movies ?? [] : [];
+  } catch { return []; }
+}
 
-  if (data.status !== 'ok' || !data.data?.movie_count) return null;
+export async function searchYTS(title, year) {
+  // Try with year first, then title only
+  const movies = (await ytsQuery(year ? `${title} ${year}` : title))
+    .concat(year ? await ytsQuery(title) : []);
 
-  for (const movie of data.data.movies ?? []) {
+  // Deduplicate by id
+  const seen = new Set();
+  const unique = movies.filter(m => seen.has(m.id) ? false : seen.add(m.id));
+
+  for (const movie of unique) {
     const torrents = (movie.torrents ?? [])
       .filter(t => ['1080p', '720p'].includes(t.quality))
       .sort((a, b) => {

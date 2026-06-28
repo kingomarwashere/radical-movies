@@ -325,7 +325,7 @@ async function runPipeline(jobId) {
   }
 
   console.log(`[pipeline] search result for "${job.title}":`, torrent ? `${torrent.quality} via ${torrent.source}` : 'NOT FOUND');
-  if (!torrent) throw new Error(`No 720p/1080p torrent found for "${job.title}"`);
+  if (!torrent) throw new Error(`No torrent found for "${job.title}"`);
 
   emit({
     status: 'downloading',

@@ -102,29 +102,35 @@ function qualScore(name) {
   return 0;
 }
 
-export async function searchTL(title, year) {
-  const query = year ? `${title} ${year} 1080p` : `${title} 1080p`;
-
-  let data;
+async function tlSearch(query) {
   try {
     const text = await tlFetch(
       `/torrents/browse/list/query/${encodeURIComponent(query)}/categories/${MOVIE_CATS}`,
       { headers: { 'Accept': 'application/json, */*' } }
     );
-    data = JSON.parse(text);
+    return JSON.parse(text);
   } catch (e) {
     console.error('[tl] search error:', e.message);
-    // Try 720p fallback
-    try {
-      const text = await tlFetch(
-        `/torrents/browse/list/query/${encodeURIComponent(title + (year ? ' ' + year : '') + ' 720p')}/categories/${MOVIE_CATS}`,
-        { headers: { 'Accept': 'application/json, */*' } }
-      );
-      data = JSON.parse(text);
-    } catch {
-      return null;
-    }
+    return null;
   }
+}
+
+export async function searchTL(title, year) {
+  // Progressive query attempts: specific → broad
+  const queries = [
+    year ? `${title} ${year} 1080p` : `${title} 1080p`,
+    year ? `${title} ${year} 720p`  : `${title} 720p`,
+    year ? `${title} ${year}`        : null,
+    title,                             // no year, no quality — widest net
+  ].filter(Boolean);
+
+  let data = null;
+  for (const q of queries) {
+    data = await tlSearch(q);
+    if (data?.torrentList?.length) break;
+  }
+
+  if (!data) return null;
 
   const results = data?.torrentList || [];
   if (!results.length) return null;
@@ -146,17 +152,26 @@ export async function searchTL(title, year) {
     return (b.seeders || 0) - (a.seeders || 0);
   };
 
-  // Prefer results under 6 GB; fall back to smallest available if nothing fits
+  // 1. HD under 6 GB (ideal)
   let valid = results.filter(t => baseFilter(t) && parseInt(t.size || 0) <= MAX_SIZE).sort(rank);
+  // 2. Any HD (over size limit)
   if (!valid.length) {
     valid = results.filter(baseFilter).sort((a, b) => parseInt(a.size || 0) - parseInt(b.size || 0));
     if (valid.length) console.log(`[tl] no results under 6 GB, using smallest: ${(parseInt(valid[0].size)/1e9).toFixed(1)} GB`);
+  }
+  // 3. Any non-cam result (older/niche films with no HD version)
+  if (!valid.length) {
+    valid = results
+      .filter(t => qualScore(t.name) >= 0)
+      .sort((a, b) => (b.seeders || 0) - (a.seeders || 0));
+    if (valid.length) console.log(`[tl] no HD results, using best available: ${valid[0].name}`);
   }
 
   if (!valid.length) return null;
 
   const best = valid[0];
-  const quality = best.name.toLowerCase().includes('1080p') ? '1080p' : '720p';
+  const n = best.name.toLowerCase();
+  const quality = n.includes('1080p') ? '1080p' : n.includes('720p') ? '720p' : 'SD';
 
   console.log(`[tl] best match: ${best.name} | seeds: ${best.seeders} | id: ${best.fid}`);
 
