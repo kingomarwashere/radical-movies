@@ -146,10 +146,15 @@ export async function searchTL(title, year) {
   const results = data?.torrentList || [];
   if (!results.length) return null;
 
-  const MAX_SIZE = 6 * 1024 * 1024 * 1024; // 6 GB cap
+  const GB = 1024 * 1024 * 1024;
+  const MAX_SIZE = 4 * GB; // 4 GB hard cap — WEBRips fit, Remux/UHD excluded
+
+  const sizeOf = (t) => parseInt(t.size || 0);
 
   const baseFilter = (t) => {
     const n = t.name.toLowerCase();
+    // Exclude Remux and UHD/4K — these are always huge and unnecessary
+    if (n.includes('remux') || n.includes('2160p') || n.includes('4k') || n.includes('uhd')) return false;
     return qualScore(t.name) >= 0 && (n.includes('1080p') || n.includes('720p'));
   };
 
@@ -166,19 +171,22 @@ export async function searchTL(title, year) {
     return (b.seeders || 0) - (a.seeders || 0);
   };
 
-  // 1. HD under 6 GB (ideal)
-  let valid = results.filter(t => baseFilter(t) && parseInt(t.size || 0) <= MAX_SIZE).sort(rank);
-  // 2. Any HD (over size limit)
+  // 1. HD under 4 GB — ideal (WEBRip MP4 typically 1.5-4 GB)
+  let valid = results.filter(t => baseFilter(t) && sizeOf(t) <= MAX_SIZE).sort(rank);
+
+  // 2. HD under 8 GB — relaxed cap (some releases run 5-7 GB)
   if (!valid.length) {
-    valid = results.filter(baseFilter).sort((a, b) => parseInt(a.size || 0) - parseInt(b.size || 0));
-    if (valid.length) console.log(`[tl] no results under 6 GB, using smallest: ${(parseInt(valid[0].size)/1e9).toFixed(1)} GB`);
+    valid = results.filter(t => baseFilter(t) && sizeOf(t) <= 8 * GB)
+                   .sort((a, b) => sizeOf(a) - sizeOf(b));
+    if (valid.length) console.log(`[tl] no results under 4 GB, using smallest HD: ${(sizeOf(valid[0])/1e9).toFixed(1)} GB`);
   }
-  // 3. Any non-cam result (older/niche films with no HD version)
+
+  // 3. Any non-cam/non-remux — last resort for niche films with no small HD version
   if (!valid.length) {
     valid = results
-      .filter(t => qualScore(t.name) >= 0)
-      .sort((a, b) => (b.seeders || 0) - (a.seeders || 0));
-    if (valid.length) console.log(`[tl] no HD results, using best available: ${valid[0].name}`);
+      .filter(t => qualScore(t.name) >= 0 && !t.name.toLowerCase().includes('remux'))
+      .sort((a, b) => sizeOf(a) - sizeOf(b)); // smallest first
+    if (valid.length) console.log(`[tl] no HD results, using best available: ${valid[0].name} (${(sizeOf(valid[0])/1e9).toFixed(1)} GB)`);
   }
 
   if (!valid.length) return null;
