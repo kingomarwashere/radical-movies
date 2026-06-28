@@ -85,10 +85,22 @@ app.post('/api/watch', async (req, res) => {
     const match = (tmdbId && job.tmdbId === tmdbId) ||
                   (job.title?.toLowerCase() === title?.toLowerCase() && String(job.year) === String(year));
     if (!match) continue;
+
     if (job.status === 'ready' && job.streamUrl) {
-      console.log(`[pipeline] serving cached: ${title} (${year})`);
-      return res.json({ jobId: id, streamUrl: job.streamUrl, ready: true });
+      // Quick HEAD check — confirms the R2 file actually exists before serving
+      const exists = await fetch(job.streamUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) })
+        .then(r => r.ok || r.status === 206).catch(() => false);
+      if (exists) {
+        console.log(`[pipeline] serving cached: ${title} (${year})`);
+        return res.json({ jobId: id, streamUrl: job.streamUrl, ready: true });
+      }
+      // File missing from R2 — drop the stale job and re-download
+      console.warn(`[pipeline] R2 file missing for "${title}", removing stale job ${id}`);
+      jobs.delete(id);
+      saveJobs();
+      break;
     }
+
     if (['searching', 'downloading', 'uploading'].includes(job.status)) {
       console.log(`[pipeline] reusing in-progress job: ${id}`);
       return res.json({ jobId: id });
