@@ -365,8 +365,8 @@ async function runPipeline(jobId) {
       if (remoteExt !== '.mp4') {
         await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
           emit({ status: 'uploading', progress: pct,
-                 message: pct <= 50 ? `Reading from seedbox… ${pct * 2}%` : `Uploading to R2… ${(pct - 50) * 2}%` });
-        });
+                 message: pct <= 50 ? `Downloading from seedbox… ${pct * 2}%` : `Transcoding & uploading… ${(pct - 50) * 2}%` });
+        }, DOWNLOADS_DIR);
       } else {
         await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
           emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
