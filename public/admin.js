@@ -119,7 +119,7 @@ function renderJobs(jobs) {
       <td><span class="mono ${j.readyAt ? 'green' : 'muted'}">${upTime}</span></td>
       <td style="display:flex;gap:6px;align-items:center">
         ${streamBtn}
-        <button class="btn btn-ghost btn-sm" onclick="deleteJob('${j.id}')">✕</button>
+        <button class="btn btn-ghost btn-sm" data-delete="${j.id}">✕</button>
       </td>
     </tr>`;
   }).join('');
@@ -171,6 +171,17 @@ async function cleanupDisk() {
   await fetch('/api/admin/cleanup-disk', { method: 'POST' });
   appendLog('[LOG] manual disk cleanup triggered');
 }
+
+// Wire up header buttons and log clear (module scope — can't use inline onclick)
+document.getElementById('btnClearDone')?.addEventListener('click', clearCompleted);
+document.getElementById('btnCleanDisk')?.addEventListener('click', cleanupDisk);
+document.getElementById('btnClearLog')?.addEventListener('click', clearLog);
+
+// Event delegation for per-row delete buttons
+document.getElementById('jobsTbody').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-delete]');
+  if (btn) deleteJob(btn.dataset.delete);
+});
 
 // ── Util ───────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
