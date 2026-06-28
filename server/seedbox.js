@@ -59,7 +59,11 @@ export async function addTorrent(source, savePath) {
   const form = new FormData();
   let magnetHash = null;
 
-  if (source.startsWith('magnet:')) {
+  if (Buffer.isBuffer(source)) {
+    // Pre-fetched .torrent buffer (e.g. from private tracker that needs auth)
+    if (source[0] !== 0x64) throw new Error('Invalid torrent buffer (not bencoded)');
+    form.append('torrents', new Blob([source], { type: 'application/x-bittorrent' }), 'movie.torrent');
+  } else if (source.startsWith('magnet:')) {
     form.append('urls', source);
     const m = source.match(/xt=urn:btih:([a-fA-F0-9]{40}|[A-Z2-7]{32})/i);
     magnetHash = m?.[1]?.toLowerCase() || null;
@@ -71,13 +75,11 @@ export async function addTorrent(source, savePath) {
     });
     if (!torrentRes.ok) throw new Error(`Torrent fetch failed: ${torrentRes.status}`);
     const torrentBuf = Buffer.from(await torrentRes.arrayBuffer());
-    // Bencoded .torrent files always start with 'd' (0x64); anything else is an error page
     if (torrentBuf[0] !== 0x64) {
       const ct = torrentRes.headers.get('content-type') || 'unknown';
       throw new Error(`Torrent URL returned non-torrent data (${ct}): ${torrentBuf.slice(0, 120).toString('utf8')}`);
     }
-    const blob = new Blob([torrentBuf], { type: 'application/x-bittorrent' });
-    form.append('torrents', blob, 'movie.torrent');
+    form.append('torrents', new Blob([torrentBuf], { type: 'application/x-bittorrent' }), 'movie.torrent');
   }
 
   form.append('savepath', savePath || SAVE_PATH);

@@ -299,7 +299,7 @@ async function runPipeline(jobId) {
   });
 
   // 2. Download — seedbox (10Gbps) preferred, WebTorrent fallback
-  const downloadSource = torrent.torrentUrl || torrent.magnet;
+  const downloadSource = torrent.torrentBuf || torrent.torrentUrl || torrent.magnet;
 
   if (seedboxConfigured) {
     console.log(`[pipeline] using seedbox for job ${jobId}`);

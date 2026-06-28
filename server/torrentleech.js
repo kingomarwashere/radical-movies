@@ -151,9 +151,12 @@ export async function searchTL(title, year) {
 
   const best = valid[0];
   const quality = best.name.toLowerCase().includes('1080p') ? '1080p' : '720p';
-  const torrentUrl = `${TL_BASE}/download/${best.fid}/${TL_PK}/${encodeURIComponent(best.name)}.torrent`;
 
   console.log(`[tl] best match: ${best.name} | seeds: ${best.seeders} | id: ${best.fid}`);
+
+  // Download the .torrent file now, while we have a valid TL session.
+  // The download endpoint requires the session cookie — no cookie, just gets HTML.
+  const torrentBuf = await tlFetchBinary(`${TL_BASE}/download/${best.fid}/${TL_PK}`);
 
   return {
     source:     'tl',
@@ -161,8 +164,22 @@ export async function searchTL(title, year) {
     quality,
     seeds:      best.seeders || 0,
     size:       best.size || '?',
-    hash:       null, // TL torrents reveal hash after download
-    torrentUrl,
+    hash:       null,
+    torrentBuf,
     magnet:     null,
   };
+}
+
+async function tlFetchBinary(url) {
+  await ensureLogin();
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, 'Cookie': _cookie },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`TL torrent download failed: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf[0] !== 0x64) {
+    throw new Error(`TL torrent download returned non-torrent data: ${buf.slice(0, 100).toString('utf8')}`);
+  }
+  return buf;
 }
