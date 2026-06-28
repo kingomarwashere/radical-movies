@@ -1,6 +1,7 @@
 import SftpClient from 'ssh2-sftp-client';
 import { Client as SSH2Client } from 'ssh2';
 import { Readable } from 'stream';
+import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { createHash } from 'crypto';
@@ -416,6 +417,111 @@ export async function findVideoFile(jobId, torrentHash) {
     return { path: videos[0].path, size: videos[0].size };
   } finally {
     await sftp.end().catch(() => {});
+  }
+}
+
+// ── SFTP → ffmpeg (audio→AAC) → R2 ──────────────────────────────────────
+// MKV releases almost always use AC3/EAC3/DTS audio which browsers don't support.
+// This pipes the file through ffmpeg (copy video, transcode audio to AAC) on the fly
+// so no disk is used and compatibility is guaranteed.
+export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  const ext    = path.extname(remotePath).toLowerCase();
+  const outFmt = ext === '.mp4' ? 'mp4' : 'matroska';
+  const mime   = ext === '.mp4' ? 'video/mp4' : 'video/x-matroska';
+  const PART   = 8 * 1024 * 1024;
+  const CONC   = 4;
+
+  const mkUrl = (action, extra = {}) =>
+    `${r2UploadUrl}?${new URLSearchParams({ action, key: r2Key, ...extra })}`;
+  const r2h = { 'x-upload-secret': r2Secret };
+
+  const cr = await fetch(mkUrl('create', { contentType: mime }), { method: 'POST', headers: r2h });
+  if (!cr.ok) throw new Error(`R2 create: ${await cr.text()}`);
+  const { uploadId } = await cr.json();
+
+  const ffArgs = [
+    '-loglevel', 'error',
+    '-i', 'pipe:0',
+    '-c:v', 'copy',       // no video re-encode
+    '-c:a', 'aac', '-b:a', '192k', '-ac', '2', // stereo AAC — universal browser support
+    '-c:s', 'copy',
+    '-f', outFmt,
+    ...(outFmt === 'mp4' ? ['-movflags', '+frag_keyframe+empty_moov'] : []),
+    'pipe:1',
+  ];
+  const ff = spawn('ffmpeg', ffArgs);
+  let ffErr = '';
+  ff.stderr.on('data', d => { ffErr += d; });
+  ff.stdin.on('error', () => {}); // suppress broken pipe if ffmpeg exits early
+
+  const sftpHandle = streamFromSftp(remotePath);
+  const { stream } = await sftpHandle.open();
+  stream.pipe(ff.stdin);
+  stream.on('error', e => ff.stdin.destroy(e));
+
+  let inputRead = 0;
+  stream.on('data', c => {
+    inputRead += c.length;
+    onProgress?.(Math.round(inputRead / fileSize * 50)); // 0-50% = reading from seedbox
+  });
+
+  const parts    = [];
+  const inFlight = [];
+  let   partNum  = 0;
+  let   uploaded = 0;
+  let   buf      = Buffer.alloc(0);
+
+  function startPart(chunk) {
+    const pn = ++partNum;
+    return (async () => {
+      const res = await fetch(mkUrl('part', { uploadId, partNumber: String(pn) }), {
+        method: 'PUT',
+        headers: { ...r2h, 'content-type': 'application/octet-stream' },
+        body: chunk,
+      });
+      if (!res.ok) throw new Error(`R2 part ${pn}: ${await res.text()}`);
+      const { etag } = await res.json();
+      uploaded += chunk.length;
+      onProgress?.(50 + Math.round(uploaded / fileSize * 50)); // 50-100% = uploading
+      console.log(`[r2] transcode part ${pn} (${(chunk.length/1e6).toFixed(0)} MB)`);
+      return { partNumber: pn, etag };
+    })();
+  }
+
+  try {
+    for await (const chunk of ff.stdout) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : Buffer.from(chunk);
+      while (buf.length >= PART) {
+        if (inFlight.length >= CONC) parts.push(await inFlight.shift());
+        inFlight.push(startPart(Buffer.from(buf.slice(0, PART))));
+        buf = buf.slice(PART);
+      }
+    }
+    if (buf.length > 0) {
+      if (inFlight.length >= CONC) parts.push(await inFlight.shift());
+      inFlight.push(startPart(buf));
+    }
+    for (const p of inFlight) parts.push(await p);
+
+    // Verify ffmpeg exited cleanly
+    await new Promise((res, rej) =>
+      ff.on('close', code => code === 0 ? res() : rej(new Error(`ffmpeg exit ${code}: ${ffErr.slice(-300)}`)))
+    );
+
+    parts.sort((a, b) => a.partNumber - b.partNumber);
+    const done = await fetch(mkUrl('complete', { uploadId }), {
+      method: 'POST', headers: { ...r2h, 'content-type': 'application/json' },
+      body: JSON.stringify({ parts }),
+    });
+    if (!done.ok) throw new Error(`R2 complete: ${await done.text()}`);
+    console.log(`[r2] transcode upload complete: ${r2Key}`);
+
+  } catch (err) {
+    await fetch(mkUrl('abort', { uploadId }), { method: 'DELETE', headers: r2h }).catch(() => {});
+    if (ff.exitCode === null) ff.kill();
+    throw err;
+  } finally {
+    await sftpHandle.close();
   }
 }
 

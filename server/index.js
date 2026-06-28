@@ -17,7 +17,7 @@ import { searchTL } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2, transcodeAudioAndUploadToR2,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
@@ -355,13 +355,22 @@ async function runPipeline(jobId) {
     const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
 
     if (r2Configured) {
-      // 4 parallel SFTP connections each reading their own parts → R2 directly
-      const remoteExt = path.extname(remoteVideoPath);
+      const remoteExt = path.extname(remoteVideoPath).toLowerCase();
       const r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
       emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
-      await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
-        emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
-      });
+
+      // MKV almost always has AC3/EAC3/DTS audio — transcode to AAC for browser compat.
+      // MP4 files are usually already AAC so upload directly.
+      if (remoteExt !== '.mp4') {
+        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
+          emit({ status: 'uploading', progress: pct,
+                 message: pct <= 50 ? `Reading from seedbox… ${pct * 2}%` : `Uploading to R2… ${(pct - 50) * 2}%` });
+        });
+      } else {
+        await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
+          emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
+        });
+      }
       if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
       job.streamUrl = getStreamUrl(r2Key);
