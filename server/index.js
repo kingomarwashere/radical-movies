@@ -371,7 +371,8 @@ async function runPipeline(jobId) {
           emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
         });
       }
-      if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+      // deleteTorrent disabled for testing — re-enable when done
+      // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
       job.streamUrl = getStreamUrl(r2Key);
       saveJobs();
@@ -392,9 +393,8 @@ async function runPipeline(jobId) {
 
     job._rawPath = localPath;
 
-    if (torrentHash) {
-      await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
-    }
+    // deleteTorrent disabled for testing
+    // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
 
   } else {
     console.log(`[pipeline] using WebTorrent (no seedbox) for job ${jobId}`);
