@@ -51,22 +51,31 @@ async function qbt(path, opts = {}) {
   return res;
 }
 
+// Returns torrent hash so callers can track/delete by hash rather than relying on
+// the search result's hash field (which is null for .torrent file sources like TL).
 export async function addTorrent(source, savePath) {
-  const form = new FormData();
-  let torrentBuf = null;
+  if (!source) throw new Error('No torrent source provided');
 
-  if (!source || source.startsWith('magnet:')) {
-    if (!source) throw new Error('No torrent source (magnet or URL) provided');
+  const form = new FormData();
+  let magnetHash = null;
+
+  if (source.startsWith('magnet:')) {
     form.append('urls', source);
+    const m = source.match(/xt=urn:btih:([a-fA-F0-9]{40}|[A-Z2-7]{32})/i);
+    magnetHash = m?.[1]?.toLowerCase() || null;
   } else {
-    // .torrent file URL — fetch and add as buffer
     console.log(`[seedbox] fetching .torrent: ${source.slice(0, 80)}`);
     const torrentRes = await fetch(source, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
       signal: AbortSignal.timeout(20000),
     });
     if (!torrentRes.ok) throw new Error(`Torrent fetch failed: ${torrentRes.status}`);
-    torrentBuf = Buffer.from(await torrentRes.arrayBuffer());
+    const torrentBuf = Buffer.from(await torrentRes.arrayBuffer());
+    // Bencoded .torrent files always start with 'd' (0x64); anything else is an error page
+    if (torrentBuf[0] !== 0x64) {
+      const ct = torrentRes.headers.get('content-type') || 'unknown';
+      throw new Error(`Torrent URL returned non-torrent data (${ct}): ${torrentBuf.slice(0, 120).toString('utf8')}`);
+    }
     const blob = new Blob([torrentBuf], { type: 'application/x-bittorrent' });
     form.append('torrents', blob, 'movie.torrent');
   }
@@ -76,24 +85,36 @@ export async function addTorrent(source, savePath) {
 
   const res = await qbt('/torrents/add', { method: 'POST', body: form });
   const text = await res.text();
+  const jobId = path.basename(savePath);
 
-  if (text === 'Ok.') return;
+  if (text === 'Ok.') {
+    if (magnetHash) return magnetHash;
+    return getHashBySavePath(jobId);
+  }
 
-  // "Fails." usually means duplicate — check if it's already there
   if (text.includes('Fails') || text.includes('fail')) {
     console.warn(`[seedbox] add returned "${text}" — checking for duplicate`);
-    // List all torrents and look for one in our save path
-    const listRes = await qbt('/torrents/info');
-    const list = await listRes.json();
-    const existing = list.find(t => t.save_path?.includes(path.basename(savePath)));
-    if (existing) {
-      console.log(`[seedbox] found existing torrent: ${existing.name} (${existing.state})`);
-      return; // already added, carry on
+    const hash = await getHashBySavePath(jobId);
+    if (hash) {
+      console.log(`[seedbox] found duplicate: ${hash}`);
+      return hash;
     }
     throw new Error(`Add torrent failed: ${text}`);
   }
 
   throw new Error(`Add torrent failed: ${text}`);
+}
+
+async function getHashBySavePath(jobId, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const listRes = await qbt('/torrents/info');
+    const list = await listRes.json();
+    const found = list.find(t => t.save_path?.includes(jobId));
+    if (found) return found.hash;
+    await sleep(1000);
+  }
+  return null;
 }
 
 export async function getTorrentByHash(hash) {

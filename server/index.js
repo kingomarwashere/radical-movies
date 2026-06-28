@@ -306,10 +306,10 @@ async function runPipeline(jobId) {
     emit({ message: '⚡ Sending to seedbox (10Gbps)…' });
 
     const sbSavePath = getSeedboxSavePath(jobId);
-    await addTorrent(downloadSource, sbSavePath);
-    console.log(`[seedbox] torrent added, save path: ${sbSavePath}`);
+    const torrentHash = await addTorrent(downloadSource, sbSavePath);
+    console.log(`[seedbox] torrent added, hash: ${torrentHash}, save path: ${sbSavePath}`);
 
-    const completed = await waitForTorrent(torrent.hash, (p) => {
+    const completed = await waitForTorrent(torrentHash, (p) => {
       emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
     });
 
@@ -330,7 +330,9 @@ async function runPipeline(jobId) {
     job._rawPath = localPath;
 
     // Clean up seedbox
-    await deleteTorrent(torrent.hash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+    if (torrentHash) {
+      await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+    }
 
   } else {
     console.log(`[pipeline] using WebTorrent (no seedbox) for job ${jobId}`);
