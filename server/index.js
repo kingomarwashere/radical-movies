@@ -8,6 +8,7 @@ import fs from 'fs';
 import { statfs } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import os from 'os';
+import { spawn } from 'child_process';
 
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
@@ -67,9 +68,16 @@ app.post('/api/watch', async (req, res) => {
 
   // Fire pipeline without awaiting
   runPipeline(jobId).catch(err => {
+    console.error(`[pipeline] job ${jobId} failed:`, err.message);
     const j = jobs.get(jobId);
-    if (j) { j.status = 'error'; j.error = err.message; }
+    if (j) {
+      j.status = 'error';
+      j.error = err.message;
+      j.message = `Error: ${err.message}`;
+    }
     io.to(jobId).emit('job:error', { jobId, error: err.message });
+    io.to(jobId).emit('job:update', j ? sanitize(j) : { id: jobId, status: 'error', error: err.message });
+    broadcastAdmin();
   });
 });
 
@@ -145,6 +153,39 @@ app.delete('/api/admin/job/:jobId', (req, res) => {
   jobs.delete(id);
   broadcastAdmin();
   res.json({ ok: true });
+});
+
+// SSE log tail — streams the last 100 lines then follows live
+app.get('/api/admin/logs', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const send = (line) => res.write(`data: ${line}\n\n`);
+
+  // Intercept console methods and forward to SSE
+  const origLog   = console.log.bind(console);
+  const origError = console.error.bind(console);
+  const origWarn  = console.warn.bind(console);
+
+  const hook = (prefix, orig) => (...args) => {
+    orig(...args);
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    send(`${prefix} ${msg}`);
+  };
+
+  console.log   = hook('[LOG]',   origLog);
+  console.error = hook('[ERR]',   origError);
+  console.warn  = hook('[WARN]',  origWarn);
+
+  send('[connected to log stream]');
+
+  req.on('close', () => {
+    console.log   = origLog;
+    console.error = origError;
+    console.warn  = origWarn;
+    res.end();
+  });
 });
 
 app.delete('/api/admin/jobs/completed', (req, res) => {
@@ -223,14 +264,15 @@ async function runPipeline(jobId) {
 
   // 1. Search
   emit({ status: 'searching', message: 'Searching YTS…' });
-  let torrent = await searchYTS(job.title, job.year);
+  let torrent = await searchYTS(job.title, job.year).catch(e => { console.error('[yts]', e.message); return null; });
 
   if (!torrent) {
     emit({ message: 'Not on YTS — trying The Pirate Bay…' });
-    torrent = await searchTPB(job.title, job.year);
+    torrent = await searchTPB(job.title, job.year).catch(e => { console.error('[tpb]', e.message); return null; });
   }
 
-  if (!torrent) throw new Error('No 720p/1080p torrent found for this title');
+  console.log(`[pipeline] search result for "${job.title}":`, torrent ? `${torrent.quality} via ${torrent.source}` : 'NOT FOUND');
+  if (!torrent) throw new Error(`No 720p/1080p torrent found for "${job.title}"`);
 
   emit({
     status: 'downloading',

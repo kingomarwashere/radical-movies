@@ -90,12 +90,16 @@ function renderJobs(jobs) {
       : '';
     const errTitle = isErr ? `title="${esc(j.error || '')}"` : '';
 
+    const subMsg = j.status === 'error'
+      ? (j.error || j.message || '').slice(0, 80)
+      : (j.message || '').slice(0, 60);
+
     return `<tr>
       <td>
         <div class="title-cell">${esc(j.title)}</div>
-        ${j.year ? `<div class="title-year">${j.year}${j.message ? ' · ' + esc(j.message.slice(0,60)) : ''}</div>` : ''}
+        <div class="title-year">${j.year || ''}${subMsg ? ' · <span style="color:' + (j.status==='error'?'#e50914':'#888') + '">' + esc(subMsg) + '</span>' : ''}</div>
       </td>
-      <td><span class="badge badge-${j.status}" ${errTitle}>${j.status}</span></td>
+      <td><span class="badge badge-${j.status}">${j.status}</span></td>
       <td>${prog}</td>
       <td><span class="mono">${j.quality || '—'}</span></td>
       <td><span class="mono muted">${j.size || '—'}</span></td>
@@ -114,6 +118,33 @@ function renderSysbar(server) {
   document.getElementById('dotFfmpeg').className  = `dot ${server.ffmpeg ? 'dot-on' : 'dot-off'}`;
   document.getElementById('sysUptime').textContent = `uptime: ${fmtUptime(server.uptime)} · mem: ${server.memUsed} MB`;
 }
+
+// ── Log tail ───────────────────────────────────────────────────────────────
+const logBox = document.getElementById('logBox');
+const MAX_LOG_LINES = 200;
+let logLines = [];
+
+function appendLog(line) {
+  const ts = new Date().toLocaleTimeString('en-AU', { hour12: false });
+  const colored = line.startsWith('[ERR]')
+    ? `<span style="color:#e50914">${esc(line)}</span>`
+    : line.startsWith('[WARN]')
+      ? `<span style="color:#eab308">${esc(line)}</span>`
+      : `<span style="color:#666">${esc(ts)}</span> ${esc(line)}`;
+  logLines.push(colored);
+  if (logLines.length > MAX_LOG_LINES) logLines.shift();
+  logBox.innerHTML = logLines.join('\n');
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function clearLog() { logLines = []; logBox.innerHTML = ''; }
+
+function connectLogStream() {
+  const es = new EventSource('/api/admin/logs');
+  es.onmessage = (e) => appendLog(e.data);
+  es.onerror   = () => { appendLog('[WARN] log stream disconnected — reconnecting…'); setTimeout(connectLogStream, 3000); es.close(); };
+}
+connectLogStream();
 
 // ── Actions ────────────────────────────────────────────────────────────────
 async function deleteJob(id) {
