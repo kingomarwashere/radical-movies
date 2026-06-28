@@ -102,6 +102,14 @@ function qualScore(name) {
   return 0;
 }
 
+// MP4 releases already have AAC audio and skip the entire transcode pipeline.
+// Prefer them strongly — same quality video, ~half the total processing time.
+function isMp4Release(t) {
+  const n = (t.name || '').toLowerCase();
+  const f = (t.filename || '').toLowerCase();
+  return n.includes('.mp4') || n.includes(' mp4') || f.endsWith('.mp4');
+}
+
 async function tlSearch(query) {
   try {
     const text = await tlFetch(
@@ -116,12 +124,15 @@ async function tlSearch(query) {
 }
 
 export async function searchTL(title, year) {
-  // Progressive query attempts: specific → broad
+  // Progressive query attempts: MP4 variants first (skip transcode entirely),
+  // then any format, then broaden without year/quality constraints.
   const queries = [
-    year ? `${title} ${year} 1080p` : `${title} 1080p`,
-    year ? `${title} ${year} 720p`  : `${title} 720p`,
-    year ? `${title} ${year}`        : null,
-    title,                             // no year, no quality — widest net
+    year ? `${title} ${year} 1080p mp4` : `${title} 1080p mp4`,  // MP4 → no transcode
+    year ? `${title} ${year} 1080p`     : `${title} 1080p`,       // any format
+    year ? `${title} ${year} 720p mp4`  : `${title} 720p mp4`,
+    year ? `${title} ${year} 720p`      : `${title} 720p`,
+    year ? `${title} ${year}`           : null,
+    title,
   ].filter(Boolean);
 
   let data = null;
@@ -143,6 +154,9 @@ export async function searchTL(title, year) {
   };
 
   const rank = (a, b) => {
+    // MP4 wins over MKV at equal quality — no transcode needed, direct upload
+    const aMp4 = isMp4Release(a), bMp4 = isMp4Release(b);
+    if (aMp4 !== bMp4) return aMp4 ? -1 : 1;
     const qDiff = qualScore(b.name) - qualScore(a.name);
     if (qDiff !== 0) return qDiff;
     const a1080 = a.name.toLowerCase().includes('1080p');
@@ -173,7 +187,8 @@ export async function searchTL(title, year) {
   const n = best.name.toLowerCase();
   const quality = n.includes('1080p') ? '1080p' : n.includes('720p') ? '720p' : 'SD';
 
-  console.log(`[tl] best match: ${best.name} | seeds: ${best.seeders} | id: ${best.fid}`);
+  const fmt = isMp4Release(best) ? 'MP4 ✓ (no transcode)' : 'MKV (transcode needed)';
+  console.log(`[tl] best match: ${best.name} | ${fmt} | seeds: ${best.seeders} | id: ${best.fid}`);
 
   // Download the .torrent file now, while we have a valid TL session.
   // The download endpoint requires the session cookie — no cookie, just gets HTML.
