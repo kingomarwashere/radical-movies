@@ -351,6 +351,7 @@ async function runPipeline(jobId) {
     });
 
     // Scan the seedbox save dir to find the actual video file (avoids content_path quirks)
+    job.downloadedAt = Date.now(); // ← seedbox download complete
     emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
     const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
 
@@ -374,6 +375,7 @@ async function runPipeline(jobId) {
       // deleteTorrent disabled for testing — re-enable when done
       // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
+      job.readyAt   = Date.now(); // ← transcode+upload complete
       job.streamUrl = getStreamUrl(r2Key);
       saveJobs();
       io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
@@ -446,7 +448,8 @@ async function runPipeline(jobId) {
   }
 
   // 5. Done
-  job.status = 'ready';
+  job.status    = 'ready';
+  job.readyAt   = Date.now();
   job.streamUrl = streamUrl;
   saveJobs();
   io.to(jobId).emit('job:ready', { jobId, streamUrl, title: job.title });

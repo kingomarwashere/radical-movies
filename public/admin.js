@@ -67,10 +67,18 @@ function renderStreams(streams) {
   }).join('');
 }
 
+function fmtDuration(ms) {
+  if (!ms || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60)  return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
 function renderJobs(jobs) {
   const tbody = document.getElementById('jobsTbody');
   if (!jobs.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No jobs yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">No jobs yet</td></tr>';
     return;
   }
   tbody.innerHTML = jobs.map(j => {
@@ -88,11 +96,13 @@ function renderJobs(jobs) {
     const streamBtn = isDone && j.streamUrl
       ? `<a href="${j.streamUrl}" target="_blank" class="btn btn-ghost btn-sm">▶ Play</a>`
       : '';
-    const errTitle = isErr ? `title="${esc(j.error || '')}"` : '';
 
     const subMsg = j.status === 'error'
       ? (j.error || j.message || '').slice(0, 80)
       : (j.message || '').slice(0, 60);
+
+    const dlTime  = j.downloadedAt ? fmtDuration(j.downloadedAt - j.createdAt)   : '—';
+    const upTime  = j.readyAt && j.downloadedAt ? fmtDuration(j.readyAt - j.downloadedAt) : '—';
 
     return `<tr>
       <td>
@@ -105,6 +115,8 @@ function renderJobs(jobs) {
       <td><span class="mono muted">${j.size || '—'}</span></td>
       <td><span class="mono muted">${j.speed || '—'}</span></td>
       <td><span class="mono muted">${fmtUptime(age)}</span></td>
+      <td><span class="mono ${j.downloadedAt ? 'green' : 'muted'}">${dlTime}</span></td>
+      <td><span class="mono ${j.readyAt ? 'green' : 'muted'}">${upTime}</span></td>
       <td style="display:flex;gap:6px;align-items:center">
         ${streamBtn}
         <button class="btn btn-ghost btn-sm" onclick="deleteJob('${j.id}')">✕</button>
