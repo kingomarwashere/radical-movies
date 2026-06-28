@@ -413,9 +413,112 @@ export async function findVideoFile(jobId, torrentHash) {
     if (!videos.length) throw new Error(`No video file found under ${saveDir}`);
     videos.sort((a, b) => b.size - a.size);
     console.log(`[sftp] found ${videos.length} video(s), largest: ${videos[0].path} (${(videos[0].size/1e9).toFixed(2)} GB)`);
-    return videos[0].path;
+    return { path: videos[0].path, size: videos[0].size };
   } finally {
     await sftp.end().catch(() => {});
+  }
+}
+
+// ── Parallel SFTP → R2 upload ─────────────────────────────────────────────
+// Opens N_CONN parallel SFTP connections. Each picks parts off a shared queue,
+// reads the part's byte range with 64 concurrent SSH reads, then uploads to R2.
+// This saturates both the NL→AU pipe and the AU→CF pipe simultaneously.
+const MIME_MAP = { '.mkv':'video/x-matroska', '.mp4':'video/mp4', '.m4v':'video/mp4',
+                   '.webm':'video/webm', '.avi':'video/x-msvideo', '.mov':'video/quicktime' };
+
+export async function parallelSftpToR2(remotePath, fileSize, r2BaseUrl, r2Secret, r2Key, ext, onProgress) {
+  const N_CONN    = 4;              // parallel SFTP connections (= parallel part uploads)
+  const PART_SIZE = 8 * 1024 * 1024; // 8 MB per R2 part
+  const BLOCK     = 32768;          // 32 KB per SSH read packet
+  const SSH_CONC  = 64;             // concurrent SSH reads per connection
+  const nParts    = Math.ceil(fileSize / PART_SIZE);
+  const mime      = MIME_MAP[ext.toLowerCase()] || 'video/mp4';
+
+  const mkUrl = (action, extra = {}) =>
+    `${r2BaseUrl}?${new URLSearchParams({ action, key: r2Key, ...extra })}`;
+  const r2h = { 'x-upload-secret': r2Secret };
+
+  // Create R2 multipart upload
+  const cr = await fetch(mkUrl('create', { contentType: mime }), { method: 'POST', headers: r2h });
+  if (!cr.ok) throw new Error(`R2 create failed: ${await cr.text()}`);
+  const { uploadId } = await cr.json();
+  console.log(`[r2] parallel upload: ${nParts} parts × ${N_CONN} connections — ${(fileSize/1e9).toFixed(2)} GB`);
+
+  // Read a specific byte range from SFTP with SSH_CONC concurrent sub-reads
+  function readRange(ssh2sftp, handle, fileOffset, length) {
+    const buf     = Buffer.allocUnsafe(length);
+    const nBlocks = Math.ceil(length / BLOCK);
+    let inFlight = 0, nextBlock = 0, done = 0, failed = false;
+    return new Promise((resolve, reject) => {
+      function go() {
+        while (!failed && inFlight < SSH_CONC && nextBlock < nBlocks) {
+          const bi  = nextBlock++;
+          const pos = fileOffset + bi * BLOCK;
+          const len = Math.min(BLOCK, length - bi * BLOCK);
+          inFlight++;
+          ssh2sftp.read(handle, buf, bi * BLOCK, len, pos, (err) => {
+            inFlight--;
+            if (err) { failed = true; reject(err); return; }
+            if (++done === nBlocks) resolve(buf); else go();
+          });
+        }
+      }
+      go();
+    });
+  }
+
+  // Open N_CONN SFTP connections, each holding an open file handle
+  const conns = await Promise.all(Array.from({ length: N_CONN }, async () => {
+    const s = new SftpClient();
+    await s.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+    const handle = await new Promise((res, rej) =>
+      s.sftp.open(remotePath, 'r', (err, h) => err ? rej(err) : res(h))
+    );
+    return { s, handle };
+  }));
+
+  const queue = Array.from({ length: nParts }, (_, i) => i + 1); // [1..nParts]
+  const etags = [];
+  let   completed = 0;
+
+  try {
+    await Promise.all(conns.map(async ({ s, handle }) => {
+      while (true) {
+        const pn = queue.shift();
+        if (pn === undefined) break;
+        const offset  = (pn - 1) * PART_SIZE;
+        const partLen = Math.min(PART_SIZE, fileSize - offset);
+
+        const data = await readRange(s.sftp, handle, offset, partLen);
+
+        const pr = await fetch(mkUrl('part', { uploadId, partNumber: String(pn) }), {
+          method: 'PUT',
+          headers: { ...r2h, 'content-type': 'application/octet-stream' },
+          body: data,
+        });
+        if (!pr.ok) throw new Error(`R2 part ${pn} failed: ${await pr.text()}`);
+        const { etag } = await pr.json();
+        etags.push({ partNumber: pn, etag });
+        onProgress?.(Math.round(++completed / nParts * 100));
+        console.log(`[r2] part ${pn}/${nParts} (${(partLen/1e6).toFixed(0)} MB)`);
+      }
+    }));
+
+    const done = await fetch(mkUrl('complete', { uploadId }), {
+      method: 'POST', headers: { ...r2h, 'content-type': 'application/json' },
+      body: JSON.stringify({ parts: etags.sort((a, b) => a.partNumber - b.partNumber) }),
+    });
+    if (!done.ok) throw new Error(`R2 complete failed: ${await done.text()}`);
+    console.log(`[r2] upload complete: ${r2Key}`);
+
+  } catch (err) {
+    await fetch(mkUrl('abort', { uploadId }), { method: 'DELETE', headers: r2h }).catch(() => {});
+    throw err;
+  } finally {
+    for (const { s, handle } of conns) {
+      s.sftp.close(handle, () => {});
+      await s.end().catch(() => {});
+    }
   }
 }
 

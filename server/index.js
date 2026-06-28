@@ -17,10 +17,10 @@ import { searchTL } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, findVideoFile, getSeedboxSavePath, streamFromSftp,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
-import { uploadToR2, uploadStreamToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
+import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -352,22 +352,16 @@ async function runPipeline(jobId) {
 
     // Scan the seedbox save dir to find the actual video file (avoids content_path quirks)
     emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
-    const remoteVideoPath = await findVideoFile(jobId, torrentHash);
+    const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
 
     if (r2Configured) {
-      // Stream SFTP → R2 via parallel reads (64 concurrent SSH reads bypass latency)
+      // 4 parallel SFTP connections each reading their own parts → R2 directly
       const remoteExt = path.extname(remoteVideoPath);
       const r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
       emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
-      const sftpHandle = streamFromSftp(remoteVideoPath);
-      const { stream, size } = await sftpHandle.open();
-      try {
-        await uploadStreamToR2(stream, size, r2Key, remoteExt, (pct) => {
-          emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
-        });
-      } finally {
-        await sftpHandle.close();
-      }
+      await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
+        emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
+      });
       if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
       job.streamUrl = getStreamUrl(r2Key);
