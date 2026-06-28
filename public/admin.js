@@ -155,6 +155,11 @@ async function clearCompleted() {
   await fetch('/api/admin/jobs/completed', { method: 'DELETE' });
 }
 
+async function cleanupDisk() {
+  await fetch('/api/admin/cleanup-disk', { method: 'POST' });
+  appendLog('[LOG] manual disk cleanup triggered');
+}
+
 // ── Util ───────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
   if (s < 60) return `${s}s`;

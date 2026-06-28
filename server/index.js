@@ -14,6 +14,10 @@ import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB } from './piratebay.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
+import {
+  seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
+  pullFileViaSftp, getSeedboxSavePath,
+} from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
 
@@ -189,6 +193,11 @@ app.get('/api/admin/logs', (req, res) => {
   });
 });
 
+app.post('/api/admin/cleanup-disk', (req, res) => {
+  cleanOldDownloads();
+  res.json({ ok: true });
+});
+
 app.delete('/api/admin/jobs/completed', (req, res) => {
   for (const [id, job] of jobs) {
     if (job.status === 'ready' || job.status === 'error') {
@@ -283,19 +292,61 @@ async function runPipeline(jobId) {
     seeds: torrent.seeds,
   });
 
-  // 2. Download — prefer .torrent file URL (avoids UDP tracker issues), fall back to magnet
+  // 2. Download — seedbox (10Gbps) preferred, WebTorrent fallback
   const downloadSource = torrent.torrentUrl || torrent.magnet;
-  console.log(`[pipeline] using source: ${torrent.torrentUrl ? '.torrent file' : 'magnet'}`);
-  await new Promise((resolve, reject) => {
-    downloadTorrent(downloadSource, jobId, {
-      onProgress: (p) => emit({ status: 'downloading', ...p }),
-      onDone: (rawPath) => {
-        job._rawPath = rawPath;
-        resolve();
-      },
-      onError: reject,
+
+  if (seedboxConfigured) {
+    console.log(`[pipeline] using seedbox for job ${jobId}`);
+    emit({ message: '⚡ Sending to seedbox (10Gbps)…' });
+
+    const sbSavePath = getSeedboxSavePath(jobId);
+    await addTorrent(downloadSource, sbSavePath);
+    console.log(`[seedbox] torrent added, save path: ${sbSavePath}`);
+
+    const completed = await waitForTorrent(torrent.hash, (p) => {
+      emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
     });
-  });
+
+    // Find the video file on the seedbox
+    const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v']);
+    const sbFiles = completed.content_path
+      ? [completed.content_path]
+      : [path.join(sbSavePath, completed.name)];
+
+    // For multi-file torrents, the content_path is the folder
+    let remoteVideoPath = completed.content_path || path.join(sbSavePath, completed.name);
+    const ext = path.extname(remoteVideoPath).toLowerCase();
+    if (!VIDEO_EXTS.has(ext)) {
+      // It's a folder — find the largest video file inside
+      remoteVideoPath = path.join(sbSavePath, completed.name);
+      console.log(`[seedbox] multi-file torrent, pulling folder: ${remoteVideoPath}`);
+    }
+
+    // Pull from seedbox to VM via SFTP
+    const localJobDir = path.join(DOWNLOADS_DIR, jobId);
+    fs.mkdirSync(localJobDir, { recursive: true });
+    const localPath = path.join(localJobDir, path.basename(remoteVideoPath));
+
+    emit({ status: 'downloading', progress: 100, message: 'Pulling from seedbox via SFTP…' });
+    await pullFileViaSftp(remoteVideoPath, localPath, (pct) => {
+      emit({ status: 'downloading', progress: pct, message: `Pulling from seedbox… ${pct}%` });
+    });
+
+    job._rawPath = localPath;
+
+    // Clean up seedbox
+    await deleteTorrent(torrent.hash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+
+  } else {
+    console.log(`[pipeline] using WebTorrent (no seedbox) for job ${jobId}`);
+    await new Promise((resolve, reject) => {
+      downloadTorrent(downloadSource, jobId, {
+        onProgress: (p) => emit({ status: 'downloading', ...p }),
+        onDone: (rawPath) => { job._rawPath = rawPath; resolve(); },
+        onError: reject,
+      });
+    });
+  }
 
   const rawPath = job._rawPath;
   const rawExt  = getExt(rawPath);
@@ -341,6 +392,26 @@ async function runPipeline(jobId) {
   io.to(jobId).emit('job:ready', { jobId, streamUrl, title: job.title });
   io.to(jobId).emit('job:update', sanitize(job));
 }
+
+// ── Auto disk cleanup ──────────────────────────────────────────────────────
+function cleanOldDownloads() {
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  try {
+    const entries = fs.readdirSync(DOWNLOADS_DIR);
+    for (const entry of entries) {
+      const p = path.join(DOWNLOADS_DIR, entry);
+      const stat = fs.statSync(p);
+      if (Date.now() - stat.mtimeMs > TWO_HOURS) {
+        fs.rmSync(p, { recursive: true, force: true });
+        console.log(`[cleanup] deleted old download: ${entry}`);
+      }
+    }
+  } catch (e) {
+    console.warn('[cleanup] error:', e.message);
+  }
+}
+// Run cleanup every 30 minutes
+setInterval(cleanOldDownloads, 30 * 60 * 1000);
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 httpServer.listen(PORT, async () => {

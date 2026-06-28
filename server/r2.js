@@ -1,13 +1,14 @@
 import fs from 'fs';
-import https from 'https';
 import path from 'path';
 
-const ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
-const BUCKET     = process.env.R2_BUCKET_NAME || 'radical-movies-storage';
-const CF_TOKEN   = process.env.CF_API_TOKEN;
-const STREAM_URL = process.env.R2_STREAM_URL || 'https://radical-movies-r2.omar-c29.workers.dev';
+const ACCOUNT_ID  = process.env.R2_ACCOUNT_ID;
+const BUCKET      = process.env.R2_BUCKET_NAME || 'radical-movies-storage';
+const CF_TOKEN    = process.env.CF_API_TOKEN;
+const STREAM_URL  = process.env.R2_STREAM_URL  || 'https://radical-movies-r2.omar-c29.workers.dev';
+const UPLOAD_URL  = process.env.R2_UPLOAD_URL  || STREAM_URL;
 
-const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects`;
+const UPLOAD_SECRET = 'rmupload2026xk';
+const PART_SIZE     = 64 * 1024 * 1024; // 64 MB — well under Worker 100MB request limit
 
 export const r2Configured = !!(ACCOUNT_ID && CF_TOKEN);
 
@@ -20,92 +21,48 @@ const MIME = {
   '.mov':  'video/quicktime',
 };
 
-// CF REST API single-PUT limit is ~100MB — use multipart for anything larger
-const PART_SIZE = 64 * 1024 * 1024; // 64 MB
-
-export function uploadToR2(localPath, key, ext, onProgress) {
-  if (!r2Configured) return Promise.reject(new Error('R2 not configured'));
+// ── Upload via R2 Worker (supports R2 multipart natively) ───────────────────
+export async function uploadToR2(localPath, key, ext, onProgress) {
+  if (!r2Configured) throw new Error('R2 not configured');
 
   const contentType = MIME[ext?.toLowerCase()] || 'video/mp4';
-  const total = fs.statSync(localPath).size;
+  const total       = fs.statSync(localPath).size;
 
-  console.log(`[r2] upload: ${path.basename(localPath)} — ${(total/1e9).toFixed(2)} GB — ${contentType}`);
+  console.log(`[r2] uploading via Worker: ${path.basename(localPath)} — ${(total/1e9).toFixed(2)} GB`);
 
-  return total <= PART_SIZE
-    ? singlePart(localPath, key, contentType, total, onProgress)
-    : multipart(localPath, key, contentType, total, onProgress);
-}
+  const baseUrl = `${UPLOAD_URL}/upload`;
+  const params  = (extra = {}) => {
+    const p = new URLSearchParams({ key, ...extra });
+    return `${baseUrl}?${p}`;
+  };
+  const headers = { 'x-upload-secret': UPLOAD_SECRET };
 
-// ── Single-part (files ≤ 64 MB) ────────────────────────────────────────────
-function singlePart(localPath, key, contentType, total, onProgress) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(`${CF_R2_BASE}/${encodeURIComponent(key)}`);
-
-    const req = https.request({
-      hostname: url.hostname,
-      path:     url.pathname,
-      method:   'PUT',
-      headers: {
-        'Authorization': `Bearer ${CF_TOKEN}`,
-        'Content-Type':  contentType,
-        'Content-Length': String(total),
-      },
-      timeout: 10 * 60 * 1000,
-    }, (res) => {
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(key);
-        else reject(new Error(`R2 ${res.statusCode}: ${body.slice(0, 200)}`));
-      });
-    });
-
-    req.on('timeout', () => { req.destroy(); reject(new Error('R2 upload timed out')); });
-    req.on('error', reject);
-
-    let uploaded = 0;
-    const stream = fs.createReadStream(localPath);
-    stream.on('data', chunk => {
-      uploaded += chunk.length;
-      onProgress?.(Math.floor(uploaded / total * 100));
-    });
-    stream.on('error', reject);
-    stream.pipe(req);
+  // 1. Create multipart upload
+  const createRes = await fetch(params({ action: 'create', contentType }), {
+    method: 'POST', headers,
   });
-}
-
-// ── Multipart (files > 64 MB) ───────────────────────────────────────────────
-async function multipart(localPath, key, contentType, total, onProgress) {
-  const base = `${CF_R2_BASE}/${encodeURIComponent(key)}`;
-
-  // 1. Create upload
-  const createRes = await cfFetch(`${base}/mfpu/create`, { method: 'POST' });
-  if (!createRes.ok) throw new Error(`R2 multipart create failed: ${createRes.status}: ${await createRes.text()}`);
+  if (!createRes.ok) throw new Error(`R2 create failed: ${createRes.status}: ${await createRes.text()}`);
   const { uploadId } = await createRes.json();
-  console.log(`[r2] multipart upload started: ${uploadId}`);
+  console.log(`[r2] multipart started: ${uploadId}`);
 
-  const parts = [];
+  const parts    = [];
   const numParts = Math.ceil(total / PART_SIZE);
-  let uploaded = 0;
+  let   uploaded = 0;
 
   try {
     for (let i = 0; i < numParts; i++) {
       const partNumber = i + 1;
       const offset     = i * PART_SIZE;
       const chunkSize  = Math.min(PART_SIZE, total - offset);
+      const chunk      = await readChunk(localPath, offset, chunkSize);
 
-      const chunk = await readChunk(localPath, offset, chunkSize);
+      console.log(`[r2] part ${partNumber}/${numParts} (${(chunkSize/1e6).toFixed(0)} MB)`);
 
-      console.log(`[r2] uploading part ${partNumber}/${numParts} (${(chunkSize/1e6).toFixed(0)} MB)`);
-
-      const partRes = await cfFetch(
-        `${base}/mfpu/${uploadId}?partNumber=${partNumber}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Length': String(chunkSize), 'Content-Type': contentType },
-          body: chunk,
-        }
-      );
+      const partRes = await fetch(params({ action: 'part', uploadId, partNumber: String(partNumber) }), {
+        method:  'PUT',
+        headers: { ...headers, 'content-type': 'application/octet-stream' },
+        body:    chunk,
+      });
       if (!partRes.ok) throw new Error(`R2 part ${partNumber} failed: ${partRes.status}: ${await partRes.text()}`);
 
       const { etag } = await partRes.json();
@@ -116,36 +73,21 @@ async function multipart(localPath, key, contentType, total, onProgress) {
     }
 
     // 3. Complete
-    const completeRes = await cfFetch(
-      `${base}/mfpu/${uploadId}/complete`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parts }),
-      }
-    );
+    const completeRes = await fetch(params({ action: 'complete', uploadId }), {
+      method:  'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body:    JSON.stringify({ parts }),
+    });
     if (!completeRes.ok) throw new Error(`R2 complete failed: ${completeRes.status}: ${await completeRes.text()}`);
 
-    console.log(`[r2] multipart upload complete: ${key}`);
+    console.log(`[r2] upload complete: ${key}`);
     return key;
 
   } catch (err) {
-    // Abort on failure so R2 doesn't keep the incomplete upload
-    console.error('[r2] aborting multipart upload due to error:', err.message);
-    await cfFetch(`${base}/mfpu/${uploadId}`, { method: 'DELETE' }).catch(() => {});
+    // Abort incomplete upload
+    await fetch(params({ action: 'abort', uploadId }), { method: 'DELETE', headers }).catch(() => {});
     throw err;
   }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-function cfFetch(url, opts = {}) {
-  return fetch(url, {
-    ...opts,
-    headers: {
-      'Authorization': `Bearer ${CF_TOKEN}`,
-      ...(opts.headers || {}),
-    },
-  });
 }
 
 function readChunk(filePath, offset, length) {
@@ -155,11 +97,8 @@ function readChunk(filePath, offset, length) {
     try {
       fs.readSync(fd, buf, 0, length, offset);
       resolve(buf);
-    } catch (e) {
-      reject(e);
-    } finally {
-      fs.closeSync(fd);
-    }
+    } catch (e) { reject(e); }
+    finally    { fs.closeSync(fd); }
   });
 }
 
@@ -169,5 +108,9 @@ export function getStreamUrl(key) {
 
 export async function deleteFromR2(key) {
   if (!r2Configured) return;
-  await cfFetch(`${CF_R2_BASE}/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects`;
+  await fetch(`${CF_R2_BASE}/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${CF_TOKEN}` },
+  });
 }
