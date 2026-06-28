@@ -426,8 +426,11 @@ export async function findVideoFile(jobId, torrentHash) {
 // Only one temp file on disk at a time. ~3× faster than the streaming approach.
 export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress, tempDir = '/tmp') {
   const ext     = path.extname(remotePath).toLowerCase();
-  const outFmt  = ext === '.mp4' ? 'mp4' : 'matroska';
-  const mime    = ext === '.mp4' ? 'video/mp4' : 'video/x-matroska';
+  // Always output fragmented MP4 — designed for byte-range seeking in browsers.
+  // MKV output to a pipe puts the Cues index at the END so seeking stalls until
+  // the full file is buffered. fMP4 fragments are self-contained so the browser
+  // can seek by bisecting byte offsets without any front-loaded index.
+  const mime    = 'video/mp4';
   const PART    = 8 * 1024 * 1024;
   const CONC    = 4;
   const tmpFile = path.join(tempDir, `radical-tmp-${Date.now()}${ext}`);
@@ -460,12 +463,14 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
 
     const ff = spawn('ffmpeg', [
       '-loglevel', 'error',
-      '-i', tmpFile,          // reads from disk — no SFTP bottleneck
+      '-i', tmpFile,
       '-c:v', 'copy',
       '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
-      '-c:s', 'copy',
-      '-f', outFmt,
-      ...(outFmt === 'mp4' ? ['-movflags', '+frag_keyframe+empty_moov'] : []),
+      '-f', 'mp4',
+      // frag_keyframe  — new fragment at every keyframe (enables seeking)
+      // empty_moov     — tiny moov at start with no samples (required for pipe output)
+      // default_base_moof — correct base offsets so browser can calculate byte positions
+      '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
       'pipe:1',
     ]);
     let ffErr = '';

@@ -372,13 +372,25 @@ async function runPipeline(jobId) {
       const r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
       emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
 
-      // MKV almost always has AC3/EAC3/DTS audio — transcode to AAC for browser compat.
-      // MP4 files are usually already AAC so upload directly.
+      // MKV almost always has non-AAC audio — transcode to fMP4 (AAC audio, seekable).
+      // MP4 files are usually already AAC so upload directly via parallel SFTP.
       if (remoteExt !== '.mp4') {
-        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
+        // Output is always fragmented MP4 regardless of input container
+        const r2KeyMp4 = r2Key.replace(/\.[^.]+$/, '.mp4');
+        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2KeyMp4, (pct) => {
           emit({ status: 'uploading', progress: pct,
                  message: pct <= 50 ? `Downloading from seedbox… ${pct * 2}%` : `Transcoding & uploading… ${(pct - 50) * 2}%` });
         }, DOWNLOADS_DIR);
+        // Use the .mp4 key for the stream URL
+        job.status    = 'ready';
+        job.readyAt   = Date.now();
+        job.streamUrl = getStreamUrl(r2KeyMp4);
+        saveJobs();
+        io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
+        io.to(jobId).emit('job:update', sanitize(job));
+        // deleteTorrent disabled for testing
+        // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+        return;
       } else {
         await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
           emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
