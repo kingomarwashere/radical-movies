@@ -12,13 +12,12 @@ const MOVIE_CATS = '8,36,37';
 
 let _cookie = null;
 let _loginAt = 0;
+let _loginPromise = null;
 const SESSION_TTL = 3 * 60 * 60 * 1000; // 3 hours
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
-async function ensureLogin() {
-  if (_cookie && Date.now() - _loginAt < SESSION_TTL) return;
-
+async function _doLogin() {
   // Use redirect:'manual' so we capture Set-Cookie from the 302 response.
   // Following the redirect discards the intermediate Set-Cookie headers.
   const res = await fetch(`${TL_BASE}/user/account/login/`, {
@@ -38,7 +37,6 @@ async function ensureLogin() {
   const sid = cookieHeader.match(/PHPSESSID=([^;,\s]+)/)?.[1];
 
   if (!sid) {
-    // Got a 200 (login error page) — credentials wrong
     const body = await res.text().catch(() => '');
     const hint = body.includes('Invalid') ? 'Invalid credentials' : `status ${res.status}`;
     throw new Error(`TorrentLeech login failed: ${hint}`);
@@ -47,6 +45,14 @@ async function ensureLogin() {
   _cookie  = `PHPSESSID=${sid}`;
   _loginAt = Date.now();
   console.log('[tl] session established:', _cookie.slice(0, 30));
+}
+
+// Serialise logins — concurrent callers share one in-flight promise
+async function ensureLogin() {
+  if (_cookie && Date.now() - _loginAt < SESSION_TTL) return;
+  if (_loginPromise) return _loginPromise;
+  _loginPromise = _doLogin().finally(() => { _loginPromise = null; });
+  return _loginPromise;
 }
 
 async function tlFetch(path, opts = {}, _retried = false) {
