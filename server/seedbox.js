@@ -1,4 +1,5 @@
 import SftpClient from 'ssh2-sftp-client';
+import { Client as SSH2Client } from 'ssh2';
 import { Readable } from 'stream';
 import path from 'path';
 import fs from 'fs';
@@ -227,6 +228,84 @@ export async function pullFileViaSftp(remotePath, localPath, onProgress) {
   } finally {
     await sftp.end().catch(() => {});
   }
+}
+
+// Upload a seedbox file directly to R2 via SSH: run a Python script ON the seedbox
+// so bytes travel Seedbox (NL) → Cloudflare R2 and never touch the AU VM.
+export function uploadFromSeedbox(remotePath, r2Key, r2Url, r2Secret, onProgress) {
+  // Python script that runs ON the seedbox and streams the file to R2 multipart
+  const ext = path.extname(remotePath).toLowerCase();
+  const mimeMap = {'.mkv':'video/x-matroska','.mp4':'video/mp4','.avi':'video/x-msvideo','.webm':'video/webm','.m4v':'video/mp4'};
+  const mime = mimeMap[ext] || 'video/mp4';
+
+  const py = `
+import sys, json, math, os
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+
+FILE   = ${JSON.stringify(remotePath)}
+KEY    = ${JSON.stringify(r2Key)}
+MIME   = ${JSON.stringify(mime)}
+BASE   = ${JSON.stringify(r2Url + '/upload')}
+SECRET = ${JSON.stringify(r2Secret)}
+CHUNK  = 8 * 1024 * 1024
+
+def api(action, extra='', method='GET', data=None, ct=None):
+    url = f"{BASE}?action={action}&key={quote(KEY,safe='')}{extra}"
+    hdrs = {'x-upload-secret': SECRET}
+    if ct: hdrs['content-type'] = ct
+    with urlopen(Request(url, data=data, method=method, headers=hdrs)) as r:
+        return json.loads(r.read())
+
+size   = os.path.getsize(FILE)
+nparts = math.ceil(size / CHUNK)
+uid    = api('create', f'&contentType={MIME}', 'POST')['uploadId']
+sys.stdout.write(json.dumps({'uid': uid, 'size': size}) + '\\n'); sys.stdout.flush()
+
+parts = []
+with open(FILE, 'rb') as f:
+    for i in range(nparts):
+        chunk = f.read(CHUNK)
+        pn    = i + 1
+        etag  = api('part', f'&uploadId={uid}&partNumber={pn}', 'PUT', chunk, 'application/octet-stream')['etag']
+        parts.append({'partNumber': pn, 'etag': etag})
+        sys.stdout.write(json.dumps({'pct': round(pn/nparts*100), 'part': pn, 'total': nparts}) + '\\n')
+        sys.stdout.flush()
+
+api('complete', f'&uploadId={uid}', 'POST', json.dumps({'parts': parts}).encode(), 'application/json')
+sys.stdout.write(json.dumps({'done': True}) + '\\n'); sys.stdout.flush()
+`;
+
+  return new Promise((resolve, reject) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`python3 -c ${JSON.stringify(py)}`, (err, stream) => {
+        if (err) { conn.end(); return reject(err); }
+        let lineBuf = '';
+        let stderr  = '';
+        stream.stdout.on('data', (data) => {
+          lineBuf += data.toString();
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.pct  !== undefined) onProgress?.(msg.pct);
+              if (msg.done) resolve();
+            } catch { /* partial line */ }
+          }
+        });
+        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+        stream.on('close', (code) => {
+          conn.end();
+          if (code !== 0) reject(new Error(`Seedbox upload failed (exit ${code}): ${stderr.slice(-500)}`));
+        });
+      });
+    });
+    conn.on('error', reject);
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
 }
 
 // Stream file from seedbox SFTP directly into an async iterator (no VM disk).
