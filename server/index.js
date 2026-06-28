@@ -315,7 +315,7 @@ async function runPipeline(jobId) {
 
     // Scan the seedbox save dir to find the actual video file (avoids content_path quirks)
     emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
-    const remoteVideoPath = await findVideoFile(jobId);
+    const remoteVideoPath = await findVideoFile(jobId, torrentHash);
 
     if (r2Configured) {
       // Stream SFTP → R2 directly — no VM disk required

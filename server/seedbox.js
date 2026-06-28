@@ -1,6 +1,37 @@
 import SftpClient from 'ssh2-sftp-client';
 import path from 'path';
 import fs from 'fs';
+import { createHash } from 'crypto';
+
+// Minimal bencode parser — returns the byte-end position of the value starting at pos
+function _bencEnd(buf, pos) {
+  const c = buf[pos];
+  if (c === 0x64 || c === 0x6C) { // 'd' or 'l'
+    pos++;
+    while (pos < buf.length && buf[pos] !== 0x65) pos = _bencEnd(buf, pos);
+    return pos + 1;
+  }
+  if (c === 0x69) { const e = buf.indexOf(0x65, pos + 1); return e + 1; } // 'i<n>e'
+  if (c >= 0x30 && c <= 0x39) { // '<len>:<data>'
+    const colon = buf.indexOf(0x3A, pos);
+    return colon + 1 + parseInt(buf.slice(pos, colon).toString('ascii'), 10);
+  }
+  throw new Error(`bencode: unknown type 0x${c.toString(16)} at ${pos}`);
+}
+
+// Extract the SHA-1 info hash from a .torrent buffer without a full bencode library
+function extractInfoHash(buf) {
+  const marker = Buffer.from('4:info');
+  for (let i = 0; i <= buf.length - marker.length; i++) {
+    if (!buf.slice(i, i + marker.length).equals(marker)) continue;
+    const start = i + marker.length;
+    try {
+      const end = _bencEnd(buf, start);
+      return createHash('sha1').update(buf.slice(start, end)).digest('hex');
+    } catch { /* false positive, keep scanning */ }
+  }
+  return null;
+}
 
 const QB_URL      = process.env.SEEDBOX_QB_URL  || 'https://114.ftl1.seedit4.me/qbittorrent';
 const QB_USER     = process.env.SEEDBOX_USER     || 'seedit4me';
@@ -96,11 +127,24 @@ export async function addTorrent(source, savePath) {
 
   if (text.includes('Fails') || text.includes('fail')) {
     console.warn(`[seedbox] add returned "${text}" — checking for duplicate`);
-    const hash = await getHashBySavePath(jobId);
-    if (hash) {
-      console.log(`[seedbox] found duplicate: ${hash}`);
-      return hash;
+
+    // 1. Check if it landed at the expected save path anyway
+    const hashByPath = await getHashBySavePath(jobId, 3000);
+    if (hashByPath) { console.log(`[seedbox] duplicate at new path: ${hashByPath}`); return hashByPath; }
+
+    // 2. Extract infohash from the buffer and find any orphaned torrent
+    if (Buffer.isBuffer(source)) {
+      const knownHash = extractInfoHash(source);
+      if (knownHash) {
+        const res  = await qbt(`/torrents/info?hashes=${knownHash}`);
+        const list = await res.json();
+        if (list[0]) {
+          console.log(`[seedbox] found orphaned torrent by infohash: ${knownHash} at ${list[0].save_path}`);
+          return knownHash;
+        }
+      }
     }
+
     throw new Error(`Add torrent failed: ${text}`);
   }
 
@@ -219,14 +263,23 @@ async function listVideosRecursive(sftp, dirPath) {
   return results;
 }
 
-// Find the largest video file inside a torrent's save folder
-export async function findVideoFile(jobId) {
+// Find the largest video file inside a torrent's save folder.
+// Pass torrentHash to let us look up the actual save path from qBittorrent —
+// handles orphaned torrents that were added under a different jobId.
+export async function findVideoFile(jobId, torrentHash) {
   const sftp = new SftpClient();
   try {
     await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
 
-    // Our save path for this job
-    const saveDir = getSeedboxSavePath(jobId);
+    let saveDir = getSeedboxSavePath(jobId);
+    if (torrentHash) {
+      const res  = await qbt(`/torrents/info?hashes=${torrentHash}`);
+      const list = await res.json();
+      if (list[0]?.save_path) {
+        saveDir = list[0].save_path.replace(/\/$/, '');
+        console.log(`[sftp] using qBittorrent save path: ${saveDir}`);
+      }
+    }
     console.log(`[sftp] scanning ${saveDir} for video files`);
     const videos = await listVideosRecursive(sftp, saveDir);
 
