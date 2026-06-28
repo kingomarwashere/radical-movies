@@ -17,10 +17,10 @@ import { searchTL } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, findVideoFile, getSeedboxSavePath, uploadFromSeedbox,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath, streamFromSftp,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
-import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, UPLOAD_SECRET, UPLOAD_URL } from './r2.js';
+import { uploadToR2, uploadStreamToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -318,13 +318,19 @@ async function runPipeline(jobId) {
     const remoteVideoPath = await findVideoFile(jobId, torrentHash);
 
     if (r2Configured) {
-      // Upload directly from seedbox → R2 (NL→Cloudflare), VM not in the data path
-      const r2Key = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
-      emit({ status: 'uploading', progress: 0, message: 'Uploading seedbox → R2…' });
-      console.log(`[pipeline] seedbox direct upload: ${remoteVideoPath} → ${r2Key}`);
-      await uploadFromSeedbox(remoteVideoPath, r2Key, UPLOAD_URL, UPLOAD_SECRET, (pct) => {
-        emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
-      });
+      // Stream SFTP → R2 via parallel reads (64 concurrent SSH reads bypass latency)
+      const remoteExt = path.extname(remoteVideoPath);
+      const r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
+      emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
+      const sftpHandle = streamFromSftp(remoteVideoPath);
+      const { stream, size } = await sftpHandle.open();
+      try {
+        await uploadStreamToR2(stream, size, r2Key, remoteExt, (pct) => {
+          emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
+        });
+      } finally {
+        await sftpHandle.close();
+      }
       if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
       job.status    = 'ready';
       job.streamUrl = getStreamUrl(r2Key);

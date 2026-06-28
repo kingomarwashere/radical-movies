@@ -5,9 +5,9 @@ const ACCOUNT_ID  = process.env.R2_ACCOUNT_ID;
 const BUCKET      = process.env.R2_BUCKET_NAME || 'radical-movies-storage';
 const CF_TOKEN    = process.env.CF_API_TOKEN;
 const STREAM_URL  = process.env.R2_STREAM_URL  || 'https://radical-movies-r2.omar-c29.workers.dev';
-export const UPLOAD_URL = process.env.R2_UPLOAD_URL || STREAM_URL;
+const UPLOAD_URL = process.env.R2_UPLOAD_URL || STREAM_URL;
 
-export const UPLOAD_SECRET = 'rmupload2026xk';
+const UPLOAD_SECRET = 'rmupload2026xk';
 const PART_SIZE = 64 * 1024 * 1024; // 64 MB for disk-based uploads
 
 export const r2Configured = !!(ACCOUNT_ID && CF_TOKEN);
