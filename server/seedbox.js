@@ -118,26 +118,73 @@ export async function pullFileViaSftp(remotePath, localPath, onProgress) {
   const sftp = new SftpClient();
   try {
     await sftp.connect({
-      host:     SFTP_HOST,
-      port:     SFTP_PORT,
-      username: QB_USER,
-      password: QB_PASS,
+      host: SFTP_HOST, port: SFTP_PORT,
+      username: QB_USER, password: QB_PASS,
     });
-
     console.log(`[sftp] pulling ${remotePath} → ${localPath}`);
     const stat = await sftp.stat(remotePath);
     const total = stat.size;
     let transferred = 0;
-
     await sftp.fastGet(remotePath, localPath, {
-      step: (bytes) => {
-        transferred = bytes;
-        onProgress?.(Math.floor(transferred / total * 100));
-      },
+      step: (bytes) => { transferred = bytes; onProgress?.(Math.floor(transferred / total * 100)); },
     });
-
-    console.log(`[sftp] transfer complete: ${(total / 1e9).toFixed(2)} GB`);
+    console.log(`[sftp] done: ${(total / 1e9).toFixed(2)} GB`);
     return localPath;
+  } finally {
+    await sftp.end().catch(() => {});
+  }
+}
+
+// Stream file from seedbox SFTP directly into an async iterator (no VM disk)
+export function streamFromSftp(remotePath) {
+  const sftp = new SftpClient();
+  return {
+    async open() {
+      await sftp.connect({
+        host: SFTP_HOST, port: SFTP_PORT,
+        username: QB_USER, password: QB_PASS,
+      });
+      const stat = await sftp.stat(remotePath);
+      const stream = sftp.createReadStream(remotePath);
+      return { stream, size: stat.size };
+    },
+    async close() { await sftp.end().catch(() => {}); },
+  };
+}
+
+const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v']);
+
+// Walk a remote directory recursively and return all video files sorted by size desc
+async function listVideosRecursive(sftp, dirPath) {
+  const results = [];
+  let entries;
+  try { entries = await sftp.list(dirPath); } catch { return results; }
+  for (const e of entries) {
+    const full = dirPath.replace(/\/$/, '') + '/' + e.name;
+    if (e.type === 'd' && e.name !== '.' && e.name !== '..') {
+      results.push(...await listVideosRecursive(sftp, full));
+    } else if (VIDEO_EXTS.has(path.extname(e.name).toLowerCase())) {
+      results.push({ path: full, size: e.size });
+    }
+  }
+  return results;
+}
+
+// Find the largest video file inside a torrent's save folder
+export async function findVideoFile(jobId) {
+  const sftp = new SftpClient();
+  try {
+    await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+
+    // Our save path for this job
+    const saveDir = getSeedboxSavePath(jobId);
+    console.log(`[sftp] scanning ${saveDir} for video files`);
+    const videos = await listVideosRecursive(sftp, saveDir);
+
+    if (!videos.length) throw new Error(`No video file found under ${saveDir}`);
+    videos.sort((a, b) => b.size - a.size);
+    console.log(`[sftp] found ${videos.length} video(s), largest: ${videos[0].path} (${(videos[0].size/1e9).toFixed(2)} GB)`);
+    return videos[0].path;
   } finally {
     await sftp.end().catch(() => {});
   }

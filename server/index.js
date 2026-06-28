@@ -16,7 +16,7 @@ import { searchTPB } from './piratebay.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, getSeedboxSavePath,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
@@ -307,20 +307,9 @@ async function runPipeline(jobId) {
       emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
     });
 
-    // Find the video file on the seedbox
-    const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v']);
-    const sbFiles = completed.content_path
-      ? [completed.content_path]
-      : [path.join(sbSavePath, completed.name)];
-
-    // For multi-file torrents, the content_path is the folder
-    let remoteVideoPath = completed.content_path || path.join(sbSavePath, completed.name);
-    const ext = path.extname(remoteVideoPath).toLowerCase();
-    if (!VIDEO_EXTS.has(ext)) {
-      // It's a folder — find the largest video file inside
-      remoteVideoPath = path.join(sbSavePath, completed.name);
-      console.log(`[seedbox] multi-file torrent, pulling folder: ${remoteVideoPath}`);
-    }
+    // Scan the seedbox save dir to find the actual video file (avoids content_path quirks)
+    emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
+    const remoteVideoPath = await findVideoFile(jobId);
 
     // Pull from seedbox to VM via SFTP
     const localJobDir = path.join(DOWNLOADS_DIR, jobId);
