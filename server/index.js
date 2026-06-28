@@ -5,7 +5,9 @@ import { Server } from 'socket.io';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import { statfs } from 'fs/promises';
 import { fileURLToPath } from 'url';
+import os from 'os';
 
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
@@ -25,8 +27,9 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
-// In-memory job store
-const jobs = new Map();
+// In-memory stores
+const jobs          = new Map(); // jobId → job
+const activeStreams  = new Map(); // streamId → { jobId, title, ip, startedAt, bytesSent }
 
 // ── TMDB routes ────────────────────────────────────────────────────────────
 const wrap = (fn) => (req, res) =>
@@ -82,9 +85,24 @@ app.get('/api/stream/:jobId', (req, res) => {
   const total = stat.size;
   const range = req.headers.range;
 
+  // Track this stream
+  const streamId = randomUUID();
+  const streamEntry = {
+    id: streamId,
+    jobId: job.id,
+    title: job.title,
+    ip: req.headers['x-forwarded-for']?.split(',')[0] ?? req.socket.remoteAddress ?? '?',
+    startedAt: Date.now(),
+    bytesSent: 0,
+    size: total,
+  };
+  activeStreams.set(streamId, streamEntry);
+  broadcastAdmin();
+
   res.setHeader('Content-Type', 'video/mp4');
   res.setHeader('Accept-Ranges', 'bytes');
 
+  let stream;
   if (range) {
     const [s, e] = range.replace(/bytes=/, '').split('-');
     const start = parseInt(s, 10);
@@ -93,12 +111,45 @@ app.get('/api/stream/:jobId', (req, res) => {
       'Content-Range': `bytes ${start}-${end}/${total}`,
       'Content-Length': end - start + 1,
     });
-    fs.createReadStream(filePath, { start, end }).pipe(res);
+    stream = fs.createReadStream(filePath, { start, end });
   } else {
     res.setHeader('Content-Length', total);
     res.writeHead(200);
-    fs.createReadStream(filePath).pipe(res);
+    stream = fs.createReadStream(filePath);
   }
+
+  stream.on('data', (chunk) => { streamEntry.bytesSent += chunk.length; });
+  stream.pipe(res);
+
+  res.on('close', () => {
+    activeStreams.delete(streamId);
+    broadcastAdmin();
+  });
+});
+
+// ── Admin API ──────────────────────────────────────────────────────────────
+app.get('/api/admin/stats', async (req, res) => res.json(await buildAdminStats()));
+
+app.delete('/api/admin/job/:jobId', (req, res) => {
+  const id = req.params.jobId;
+  const job = jobs.get(id);
+  if (!job) return res.status(404).json({ error: 'not found' });
+  // Clean up local file if present
+  if (job.localPath && fs.existsSync(job.localPath)) fs.unlink(job.localPath, () => {});
+  jobs.delete(id);
+  broadcastAdmin();
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/jobs/completed', (req, res) => {
+  for (const [id, job] of jobs) {
+    if (job.status === 'ready' || job.status === 'error') {
+      if (job.localPath && fs.existsSync(job.localPath)) fs.unlink(job.localPath, () => {});
+      jobs.delete(id);
+    }
+  }
+  broadcastAdmin();
+  res.json({ ok: true });
 });
 
 // ── Socket.io ──────────────────────────────────────────────────────────────
@@ -109,7 +160,45 @@ io.on('connection', (socket) => {
     if (job) socket.emit('job:update', sanitize(job));
     if (job?.status === 'ready') socket.emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
   });
+
+  socket.on('admin:join', async () => {
+    socket.join('admin');
+    socket.emit('admin:stats', await buildAdminStats());
+  });
 });
+
+// ── Admin helpers ──────────────────────────────────────────────────────────
+async function buildAdminStats() {
+  let disk = { free: null, total: null };
+  try {
+    const s = await statfs(DOWNLOADS_DIR);
+    disk = {
+      free:  Math.round(s.bfree  * s.bsize / 1e9 * 10) / 10,
+      total: Math.round(s.blocks * s.bsize / 1e9 * 10) / 10,
+      used:  Math.round((s.blocks - s.bfree) * s.bsize / 1e9 * 10) / 10,
+    };
+  } catch {}
+
+  const jobList = [...jobs.values()].map(sanitize).sort((a, b) => b.createdAt - a.createdAt);
+  const streams = [...activeStreams.values()];
+
+  return {
+    jobs: jobList,
+    streams,
+    disk,
+    server: {
+      uptime:   Math.floor(process.uptime()),
+      memUsed:  Math.round(process.memoryUsage().rss / 1e6),
+      r2:       r2Configured,
+      ffmpeg:   await isFfmpegAvailable().catch(() => false),
+    },
+  };
+}
+
+async function broadcastAdmin() {
+  const stats = await buildAdminStats();
+  io.to('admin').emit('admin:stats', stats);
+}
 
 function sanitize(job) {
   const { _rawPath, ...safe } = job;
@@ -123,6 +212,7 @@ async function runPipeline(jobId) {
   const emit = (patch) => {
     Object.assign(job, patch);
     io.to(jobId).emit('job:update', sanitize({ ...job, ...patch }));
+    broadcastAdmin();
   };
 
   // 1. Search

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Radical Movies — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     #0d0d0d;
+      --bg2:    #161616;
+      --bg3:    #1e1e1e;
+      --border: #2a2a2a;
+      --text:   #e5e5e5;
+      --muted:  #666;
+      --red:    #e50914;
+      --green:  #22c55e;
+      --yellow: #eab308;
+      --blue:   #3b82f6;
+      --orange: #f97316;
+      --mono:   'JetBrains Mono', monospace;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 13px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    .logo { font-size: 18px; font-weight: 800; color: var(--red); letter-spacing: 3px; }
+    .logo-sub { font-size: 11px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+    .conn-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); transition: background .3s;
+    }
+    .conn-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .header-right { display: flex; gap: 10px; }
+    .btn {
+      padding: 6px 14px; border-radius: 5px; border: none;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      font-family: 'Inter', sans-serif; transition: opacity .15s;
+    }
+    .btn:hover { opacity: .8; }
+    .btn-ghost { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+    .btn-red   { background: var(--red); color: #fff; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+    /* ── Stat cards ── */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 20px 24px 0; }
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+    .stat-value { font-size: 28px; font-weight: 700; font-family: var(--mono); line-height: 1; }
+    .stat-value.green  { color: var(--green); }
+    .stat-value.yellow { color: var(--yellow); }
+    .stat-value.blue   { color: var(--blue); }
+    .stat-value.orange { color: var(--orange); }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
+
+    /* ── Sections ── */
+    .section { padding: 20px 24px; }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .section-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left; padding: 8px 12px;
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .8px;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg2); }
+
+    .title-cell { font-weight: 500; max-width: 220px; }
+    .title-year { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+    /* Status badge */
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 8px; border-radius: 4px;
+      font-size: 11px; font-weight: 600; font-family: var(--mono);
+      white-space: nowrap;
+    }
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
+    .badge-searching  { background: rgba(59,130,246,.15); color: var(--blue); }
+    .badge-searching::before { background: var(--blue); animation: pulse 1s infinite; }
+    .badge-downloading { background: rgba(234,179,8,.15); color: var(--yellow); }
+    .badge-downloading::before { background: var(--yellow); animation: pulse .7s infinite; }
+    .badge-processing, .badge-transcoding { background: rgba(249,115,22,.15); color: var(--orange); }
+    .badge-processing::before, .badge-transcoding::before { background: var(--orange); animation: pulse .8s infinite; }
+    .badge-uploading  { background: rgba(59,130,246,.15); color: var(--blue); }
+    .badge-uploading::before { background: var(--blue); animation: pulse .9s infinite; }
+    .badge-ready      { background: rgba(34,197,94,.15); color: var(--green); }
+    .badge-ready::before { background: var(--green); }
+    .badge-error      { background: rgba(229,9,20,.15); color: var(--red); }
+    .badge-error::before { background: var(--red); }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+
+    /* Progress bar */
+    .prog-wrap { min-width: 100px; }
+    .prog-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 3px; }
+    .prog-fill { height: 100%; border-radius: 2px; background: var(--yellow); transition: width .3s; }
+    .prog-fill.done { background: var(--green); }
+    .prog-text { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted); }
+
+    /* Active streams */
+    .stream-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-left: 3px solid var(--green);
+      border-radius: 6px; padding: 12px 16px;
+      display: grid; grid-template-columns: 1fr auto;
+      gap: 8px; align-items: center;
+    }
+    .stream-title { font-weight: 600; margin-bottom: 3px; }
+    .stream-meta { font-size: 11px; color: var(--muted); font-family: var(--mono); display: flex; gap: 16px; flex-wrap: wrap; }
+    .stream-progress { text-align: right; }
+    .stream-pct { font-size: 20px; font-weight: 700; font-family: var(--mono); color: var(--green); }
+    .stream-bytes { font-size: 11px; color: var(--muted); }
+
+    .streams-grid { display: grid; gap: 8px; }
+
+    .empty { color: var(--muted); padding: 20px 0; text-align: center; font-size: 12px; }
+
+    /* Server info bar */
+    .sysbar {
+      display: flex; gap: 20px; flex-wrap: wrap;
+      padding: 10px 24px;
+      background: var(--bg2); border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--muted); font-family: var(--mono);
+    }
+    .sysbar span { display: flex; align-items: center; gap: 5px; }
+    .sysbar .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-on  { background: var(--green); }
+    .dot-off { background: var(--red); }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 0 24px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div>
+      <div class="logo">RADICAL</div>
+      <div class="logo-sub">Admin Dashboard</div>
+    </div>
+    <div class="conn-dot" id="connDot" title="Socket connection"></div>
+  </div>
+  <div class="header-right">
+    <a href="/" class="btn btn-ghost">← Site</a>
+    <button class="btn btn-ghost" onclick="clearCompleted()">Clear Done</button>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="stats" id="statsCards">
+  <div class="stat-card">
+    <div class="stat-label">Active Downloads</div>
+    <div class="stat-value yellow" id="statActive">—</div>
+    <div class="stat-sub" id="statActiveSpeed"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Ready / Total Jobs</div>
+    <div class="stat-value green" id="statReady">—</div>
+    <div class="stat-sub" id="statTotal"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active Streams</div>
+    <div class="stat-value blue" id="statStreams">—</div>
+    <div class="stat-sub" id="statStreamDetail"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Disk Free</div>
+    <div class="stat-value orange" id="statDisk">—</div>
+    <div class="stat-sub" id="statDiskSub"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Memory</div>
+    <div class="stat-value" id="statMem">—</div>
+    <div class="stat-sub" id="statUptime"></div>
+  </div>
+</div>
+
+<!-- Active Streams -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-title">Active Streams</div>
+  </div>
+  <div class="streams-grid" id="streamsGrid">
+    <div class="empty">No active streams</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- Jobs -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-title">Jobs</div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Progress</th>
+          <th>Quality</th>
+          <th>Size</th>
+          <th>Speed</th>
+          <th>Age</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="jobsTbody">
+        <tr><td colspan="8" class="empty">No jobs yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- System bar -->
+<div class="sysbar" id="sysbar">
+  <span><span class="dot dot-off" id="dotR2"></span> R2</span>
+  <span><span class="dot dot-off" id="dotFfmpeg"></span> ffmpeg</span>
+  <span id="sysUptime">uptime: —</span>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="admin.js" type="module"></script>
+</body>
+</html>
