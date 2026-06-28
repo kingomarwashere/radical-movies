@@ -27,6 +27,8 @@ const PORT = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
+app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
+
 // In-memory stores
 const jobs          = new Map(); // jobId → job
 const activeStreams  = new Map(); // streamId → { jobId, title, ip, startedAt, bytesSent }
