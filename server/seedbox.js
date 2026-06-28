@@ -53,21 +53,47 @@ async function qbt(path, opts = {}) {
 
 export async function addTorrent(source, savePath) {
   const form = new FormData();
-  if (source.startsWith('magnet:')) {
+  let torrentBuf = null;
+
+  if (!source || source.startsWith('magnet:')) {
+    if (!source) throw new Error('No torrent source (magnet or URL) provided');
     form.append('urls', source);
   } else {
-    // .torrent file URL — fetch and add as file
-    const torrentRes = await fetch(source);
-    const buf = Buffer.from(await torrentRes.arrayBuffer());
-    const blob = new Blob([buf], { type: 'application/x-bittorrent' });
+    // .torrent file URL — fetch and add as buffer
+    console.log(`[seedbox] fetching .torrent: ${source.slice(0, 80)}`);
+    const torrentRes = await fetch(source, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!torrentRes.ok) throw new Error(`Torrent fetch failed: ${torrentRes.status}`);
+    torrentBuf = Buffer.from(await torrentRes.arrayBuffer());
+    const blob = new Blob([torrentBuf], { type: 'application/x-bittorrent' });
     form.append('torrents', blob, 'movie.torrent');
   }
+
   form.append('savepath', savePath || SAVE_PATH);
   form.append('category', 'radical-movies');
 
   const res = await qbt('/torrents/add', { method: 'POST', body: form });
   const text = await res.text();
-  if (text !== 'Ok.') throw new Error(`Add torrent failed: ${text}`);
+
+  if (text === 'Ok.') return;
+
+  // "Fails." usually means duplicate — check if it's already there
+  if (text.includes('Fails') || text.includes('fail')) {
+    console.warn(`[seedbox] add returned "${text}" — checking for duplicate`);
+    // List all torrents and look for one in our save path
+    const listRes = await qbt('/torrents/info');
+    const list = await listRes.json();
+    const existing = list.find(t => t.save_path?.includes(path.basename(savePath)));
+    if (existing) {
+      console.log(`[seedbox] found existing torrent: ${existing.name} (${existing.state})`);
+      return; // already added, carry on
+    }
+    throw new Error(`Add torrent failed: ${text}`);
+  }
+
+  throw new Error(`Add torrent failed: ${text}`);
 }
 
 export async function getTorrentByHash(hash) {

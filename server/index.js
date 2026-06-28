@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB } from './piratebay.js';
+import { searchTL } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
@@ -272,9 +273,14 @@ async function runPipeline(jobId) {
     broadcastAdmin();
   };
 
-  // 1. Search
-  emit({ status: 'searching', message: 'Searching YTS…' });
-  let torrent = await searchYTS(job.title, job.year).catch(e => { console.error('[yts]', e.message); return null; });
+  // 1. Search — TorrentLeech first (private, high seeds), then YTS, then TPB
+  emit({ status: 'searching', message: 'Searching TorrentLeech…' });
+  let torrent = await searchTL(job.title, job.year).catch(e => { console.error('[tl]', e.message); return null; });
+
+  if (!torrent) {
+    emit({ message: 'Not on TL — trying YTS…' });
+    torrent = await searchYTS(job.title, job.year).catch(e => { console.error('[yts]', e.message); return null; });
+  }
 
   if (!torrent) {
     emit({ message: 'Not on YTS — trying The Pirate Bay…' });
