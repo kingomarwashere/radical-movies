@@ -68,12 +68,13 @@ app.post('/api/watch', async (req, res) => {
 
   // Fire pipeline without awaiting
   runPipeline(jobId).catch(err => {
-    console.error(`[pipeline] job ${jobId} failed:`, err.message);
+    const msg = err?.message ?? String(err) ?? 'Unknown error';
+    console.error(`[pipeline] job ${jobId} failed:`, msg);
     const j = jobs.get(jobId);
     if (j) {
       j.status = 'error';
-      j.error = err.message;
-      j.message = `Error: ${err.message}`;
+      j.error = msg;
+      j.message = `Error: ${msg}`;
     }
     io.to(jobId).emit('job:error', { jobId, error: err.message });
     io.to(jobId).emit('job:update', j ? sanitize(j) : { id: jobId, status: 'error', error: err.message });

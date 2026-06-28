@@ -48,7 +48,25 @@ export async function downloadTorrent(magnetOrUrl, jobId, { onProgress, onDone, 
 
   console.log(`[torrent] adding to client for job ${jobId}`);
 
-  const torrent = client.add(source, { path: jobDir });
+  let torrent;
+  try {
+    torrent = client.add(source, { path: jobDir });
+  } catch (e) {
+    // WebTorrent throws synchronously for duplicate torrents — grab the existing one
+    if (e.message?.includes('duplicate')) {
+      const existing = client.torrents.find(t => t.path === jobDir || source === t.magnetURI);
+      if (existing) {
+        console.warn(`[torrent] reusing existing torrent for job ${jobId}`);
+        torrent = existing;
+      } else {
+        onError(e.message);
+        return;
+      }
+    } else {
+      onError(e.message ?? String(e));
+      return;
+    }
+  }
 
   torrent.on('error', (err) => {
     console.error(`[torrent] torrent error (${jobId}):`, err.message);

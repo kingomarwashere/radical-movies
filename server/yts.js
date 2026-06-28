@@ -1,14 +1,14 @@
 const YTS = 'https://yts.mx/api/v2';
 
-// HTTP/HTTPS trackers only — UDP is blocked on most VPS providers
+// HTTP/HTTPS trackers only — UDP blocked on VPS, openbittorrent.com returns 500
 const TRACKERS = [
   'http://tracker.opentrackr.org:1337/announce',
   'http://open.acgnxtracker.com:80/announce',
-  'http://tracker.openbittorrent.com:80/announce',
   'https://opentracker.i2p.rocks:443/announce',
   'http://nyaa.tracker.wf:7777/announce',
   'http://tracker.gbitt.info:80/announce',
   'https://tracker.tamersunion.org:443/announce',
+  'http://tracker.files.fm:6969/announce',
 ].map(t => `&tr=${encodeURIComponent(t)}`).join('');
 
 function magnet(hash, name) {
