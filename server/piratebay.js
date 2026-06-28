@@ -1,8 +1,12 @@
+// HTTP/HTTPS trackers only — UDP is blocked on most VPS providers
 const TRACKERS = [
-  'udp://tracker.opentrackr.org:1337/announce',
-  'udp://open.demonii.com:1337/announce',
-  'udp://tracker.coppersurfer.tk:6969',
-  'udp://tracker.leechers-paradise.org:6969',
+  'http://tracker.opentrackr.org:1337/announce',
+  'http://open.acgnxtracker.com:80/announce',
+  'http://tracker.openbittorrent.com:80/announce',
+  'https://opentracker.i2p.rocks:443/announce',
+  'http://nyaa.tracker.wf:7777/announce',
+  'http://tracker.gbitt.info:80/announce',
+  'https://tracker.tamersunion.org:443/announce',
 ].map(t => `&tr=${encodeURIComponent(t)}`).join('');
 
 function magnet(hash, name) {

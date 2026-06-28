@@ -282,9 +282,11 @@ async function runPipeline(jobId) {
     seeds: torrent.seeds,
   });
 
-  // 2. Download
+  // 2. Download — prefer .torrent file URL (avoids UDP tracker issues), fall back to magnet
+  const downloadSource = torrent.torrentUrl || torrent.magnet;
+  console.log(`[pipeline] using source: ${torrent.torrentUrl ? '.torrent file' : 'magnet'}`);
   await new Promise((resolve, reject) => {
-    downloadTorrent(torrent.magnet, jobId, {
+    downloadTorrent(downloadSource, jobId, {
       onProgress: (p) => emit({ status: 'downloading', ...p }),
       onDone: (rawPath) => {
         job._rawPath = rawPath;

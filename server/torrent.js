@@ -8,7 +8,9 @@ export const DOWNLOADS_DIR = path.join(__dirname, '..', 'downloads');
 
 if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 
-const client = new WebTorrent();
+// Disable DHT + uTP — both use UDP which is blocked on most VPS providers
+// Rely entirely on HTTP trackers for peer discovery
+const client = new WebTorrent({ dht: false, utp: false });
 
 // Single client-level error handler — don't re-register per download
 client.on('error', (err) => {
@@ -17,7 +19,7 @@ client.on('error', (err) => {
 
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v']);
 
-export function downloadTorrent(magnetLink, jobId, { onProgress, onDone, onError }) {
+export async function downloadTorrent(magnetOrUrl, jobId, { onProgress, onDone, onError }) {
   const jobDir = path.join(DOWNLOADS_DIR, jobId);
   try {
     fs.mkdirSync(jobDir, { recursive: true });
@@ -27,9 +29,26 @@ export function downloadTorrent(magnetLink, jobId, { onProgress, onDone, onError
     return;
   }
 
-  console.log(`[torrent] adding magnet for job ${jobId}`);
+  // If given a .torrent URL, fetch the file first — avoids UDP tracker dependency
+  let source = magnetOrUrl;
+  if (magnetOrUrl.startsWith('http') && !magnetOrUrl.startsWith('magnet:')) {
+    try {
+      console.log(`[torrent] fetching .torrent file: ${magnetOrUrl}`);
+      const res = await fetch(magnetOrUrl, { signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        source = Buffer.from(await res.arrayBuffer());
+        console.log(`[torrent] .torrent file fetched (${source.length} bytes)`);
+      } else {
+        console.warn(`[torrent] .torrent fetch failed ${res.status} — falling back to magnet`);
+      }
+    } catch (e) {
+      console.warn(`[torrent] .torrent fetch error: ${e.message} — falling back to magnet`);
+    }
+  }
 
-  const torrent = client.add(magnetLink, { path: jobDir });
+  console.log(`[torrent] adding to client for job ${jobId}`);
+
+  const torrent = client.add(source, { path: jobDir });
 
   torrent.on('error', (err) => {
     console.error(`[torrent] torrent error (${jobId}):`, err.message);

@@ -1,25 +1,31 @@
 const YTS = 'https://yts.mx/api/v2';
 
+// HTTP/HTTPS trackers only — UDP is blocked on most VPS providers
 const TRACKERS = [
-  'udp://open.demonii.com:1337/announce',
-  'udp://tracker.openbittorrent.com:80',
-  'udp://tracker.coppersurfer.tk:6969',
-  'udp://glotorrents.pw:6969/announce',
-  'udp://tracker.opentrackr.org:1337/announce',
-  'udp://p4p.arenabg.com:1337',
-  'udp://tracker.leechers-paradise.org:6969',
+  'http://tracker.opentrackr.org:1337/announce',
+  'http://open.acgnxtracker.com:80/announce',
+  'http://tracker.openbittorrent.com:80/announce',
+  'https://opentracker.i2p.rocks:443/announce',
+  'http://nyaa.tracker.wf:7777/announce',
+  'http://tracker.gbitt.info:80/announce',
+  'https://tracker.tamersunion.org:443/announce',
 ].map(t => `&tr=${encodeURIComponent(t)}`).join('');
 
 function magnet(hash, name) {
   return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${TRACKERS}`;
 }
 
-// Format score: lower = prefer (web MP4 first, MKV remux last)
+// YTS provides a direct .torrent file — use it instead of magnet when available
+// so peer discovery doesn't depend on trackers at all initially
+function torrentUrl(hash) {
+  return `https://yts.mx/torrent/download/${hash.toUpperCase()}`;
+}
+
 function formatScore(type = '') {
   const t = type.toLowerCase();
-  if (t === 'web') return 0;       // WEBRip / WEB-DL — MP4, browser-native
-  if (t === 'bluray') return 1;    // BluRay encode — often MKV, needs transcode
-  if (t === 'hdts') return 2;      // HD telecine — avoid
+  if (t === 'web') return 0;
+  if (t === 'bluray') return 1;
+  if (t === 'hdts') return 2;
   return 3;
 }
 
@@ -41,13 +47,10 @@ export async function searchYTS(title, year) {
     const torrents = (movie.torrents ?? [])
       .filter(t => ['1080p', '720p'].includes(t.quality))
       .sort((a, b) => {
-        // 1. Prefer web (MP4) over bluray (MKV)
         const fDiff = formatScore(a.type) - formatScore(b.type);
         if (fDiff !== 0) return fDiff;
-        // 2. Prefer 1080p
         if (a.quality === '1080p' && b.quality !== '1080p') return -1;
         if (b.quality === '1080p' && a.quality !== '1080p') return 1;
-        // 3. Most seeds
         return b.seeds - a.seeds;
       });
 
@@ -55,15 +58,16 @@ export async function searchYTS(title, year) {
     const best = torrents[0];
 
     return {
-      source: 'yts',
-      title: movie.title,
-      year: movie.year,
-      quality: best.quality,
-      type: best.type,
-      size: best.size,
-      seeds: best.seeds,
-      hash: best.hash,
-      magnet: magnet(best.hash, `${movie.title} ${best.quality}`),
+      source:      'yts',
+      title:       movie.title,
+      year:        movie.year,
+      quality:     best.quality,
+      type:        best.type,
+      size:        best.size,
+      seeds:       best.seeds,
+      hash:        best.hash,
+      torrentUrl:  torrentUrl(best.hash),   // .torrent file — preferred over magnet
+      magnet:      magnet(best.hash, `${movie.title} ${best.quality}`),
     };
   }
 
