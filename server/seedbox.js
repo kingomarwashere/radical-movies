@@ -477,6 +477,12 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
     let   uploaded = 0;
     let   buf      = Buffer.alloc(0);
 
+    // Capture ffmpeg close BEFORE reading stdout — avoids race where close fires
+    // before we register the listener and we hang waiting forever.
+    const ffClose = new Promise((res, rej) =>
+      ff.on('close', code => code === 0 ? res() : rej(new Error(`ffmpeg exit ${code}: ${ffErr.slice(-300)}`)))
+    );
+
     function startPart(chunk) {
       const pn = ++partNum;
       return (async () => {
@@ -484,6 +490,7 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
           method: 'PUT',
           headers: { ...r2h, 'content-type': 'application/octet-stream' },
           body: chunk,
+          signal: AbortSignal.timeout(120_000), // 2 min per part max
         });
         if (!res.ok) throw new Error(`R2 part ${pn}: ${await res.text()}`);
         const { etag } = await res.json();
@@ -509,14 +516,14 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
       }
       for (const p of inFlight) parts.push(await p);
 
-      await new Promise((res, rej) =>
-        ff.on('close', code => code === 0 ? res() : rej(new Error(`ffmpeg exit ${code}: ${ffErr.slice(-300)}`)))
-      );
+      // Wait for ffmpeg to exit cleanly (already listening — no race condition)
+      await ffClose;
 
       parts.sort((a, b) => a.partNumber - b.partNumber);
       const done = await fetch(mkUrl('complete', { uploadId }), {
         method: 'POST', headers: { ...r2h, 'content-type': 'application/json' },
         body: JSON.stringify({ parts }),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!done.ok) throw new Error(`R2 complete: ${await done.text()}`);
       console.log(`[r2] transcode+upload complete: ${r2Key}`);
