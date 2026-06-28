@@ -19,42 +19,39 @@ const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 async function ensureLogin() {
   if (_cookie && Date.now() - _loginAt < SESSION_TTL) return;
 
+  // Use redirect:'manual' so we capture Set-Cookie from the 302 response.
+  // Following the redirect discards the intermediate Set-Cookie headers.
   const res = await fetch(`${TL_BASE}/user/account/login/`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': UA,
       'Referer': `${TL_BASE}/user/account/login/`,
+      'Origin': TL_BASE,
     },
-    body: `username=${encodeURIComponent(TL_USER)}&password=${encodeURIComponent(TL_PASS)}`,
+    body: new URLSearchParams({ username: TL_USER, password: TL_PASS }),
     redirect: 'manual',
   });
 
-  const setCookie = res.headers.get('set-cookie') || '';
-  const sid = setCookie.match(/PHPSESSID=([^;]+)/)?.[1];
+  // Successful login → 302 with Set-Cookie: PHPSESSID=...
+  const cookieHeader = res.headers.get('set-cookie') || '';
+  const sid = cookieHeader.match(/PHPSESSID=([^;,\s]+)/)?.[1];
+
   if (!sid) {
-    // Follow redirect and check cookies from redirect response
-    const res2 = await fetch(`${TL_BASE}/user/account/login/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA },
-      body: `username=${encodeURIComponent(TL_USER)}&password=${encodeURIComponent(TL_PASS)}`,
-    });
-    const text = await res2.text();
-    if (!text.includes('logout') && !text.includes(TL_USER.slice(0, 8))) {
-      throw new Error('TorrentLeech login failed — check credentials');
-    }
-    const set = res2.headers.get('set-cookie') || '';
-    _cookie = `PHPSESSID=${set.match(/PHPSESSID=([^;]+)/)?.[1]}`;
-  } else {
-    _cookie = `PHPSESSID=${sid}`;
+    // Got a 200 (login error page) — credentials wrong
+    const body = await res.text().catch(() => '');
+    const hint = body.includes('Invalid') ? 'Invalid credentials' : `status ${res.status}`;
+    throw new Error(`TorrentLeech login failed: ${hint}`);
   }
 
+  _cookie  = `PHPSESSID=${sid}`;
   _loginAt = Date.now();
-  console.log('[tl] logged in, session:', _cookie.slice(0, 25));
+  console.log('[tl] session established:', _cookie.slice(0, 30));
 }
 
-async function tlFetch(path, opts = {}) {
+async function tlFetch(path, opts = {}, _retried = false) {
   await ensureLogin();
+
   const res = await fetch(`${TL_BASE}${path}`, {
     ...opts,
     headers: {
@@ -64,13 +61,17 @@ async function tlFetch(path, opts = {}) {
       ...(opts.headers || {}),
     },
   });
-  // Session expired — re-login once
+
   const text = await res.text();
-  if (text.includes('Login :: TorrentLeech') || text.includes('"login"')) {
-    _cookie = null;
-    await ensureLogin();
-    return tlFetch(path, opts);
+
+  // Session expired — retry exactly once, never recurse further
+  if (!_retried && text.includes('Login :: TorrentLeech')) {
+    console.warn('[tl] session expired, re-authenticating once');
+    _cookie  = null;
+    _loginAt = 0;
+    return tlFetch(path, opts, true);
   }
+
   return text;
 }
 
