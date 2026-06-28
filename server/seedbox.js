@@ -1,4 +1,5 @@
 import SftpClient from 'ssh2-sftp-client';
+import { Readable } from 'stream';
 import path from 'path';
 import fs from 'fs';
 import { createHash } from 'crypto';
@@ -228,7 +229,8 @@ export async function pullFileViaSftp(remotePath, localPath, onProgress) {
   }
 }
 
-// Stream file from seedbox SFTP directly into an async iterator (no VM disk)
+// Stream file from seedbox SFTP directly into an async iterator (no VM disk).
+// Uses parallel SSH reads (64 concurrent) for high-throughput over high-latency links.
 export function streamFromSftp(remotePath) {
   const sftp = new SftpClient();
   return {
@@ -238,8 +240,54 @@ export function streamFromSftp(remotePath) {
         username: QB_USER, password: QB_PASS,
       });
       const stat = await sftp.stat(remotePath);
-      const stream = sftp.createReadStream(remotePath);
-      return { stream, size: stat.size };
+      const size = stat.size;
+
+      // ssh2-sftp-client exposes the raw ssh2 SFTP session as .sftp after connect
+      const ssh2sftp = sftp.sftp;
+
+      // Open the remote file and build the parallel readable
+      const handle = await new Promise((res, rej) =>
+        ssh2sftp.open(remotePath, 'r', (err, h) => err ? rej(err) : res(h))
+      );
+
+      const READ_SIZE  = 32768;
+      const CONCURRENT = 64;
+      const total   = Math.ceil(size / READ_SIZE);
+      const pending = new Map();
+      let   nextSend = 0, nextEmit = 0, inFlight = 0, errored = false;
+      const out = new Readable({ highWaterMark: 8 * 1024 * 1024, read() {} });
+
+      function tryEmit() {
+        while (pending.has(nextEmit)) {
+          const data = pending.get(nextEmit);
+          pending.delete(nextEmit++);
+          if (data.length) out.push(data);
+        }
+        if (!errored && nextEmit >= total && inFlight === 0 && nextSend >= total) {
+          out.push(null);
+          ssh2sftp.close(handle, () => {});
+        }
+      }
+
+      function scheduleReads() {
+        while (!errored && inFlight < CONCURRENT && nextSend < total) {
+          const idx = nextSend++;
+          const offset = idx * READ_SIZE;
+          const len    = Math.min(READ_SIZE, size - offset);
+          const buf    = Buffer.allocUnsafe(len);
+          inFlight++;
+          ssh2sftp.read(handle, buf, 0, len, offset, (err, bytesRead) => {
+            inFlight--;
+            if (err) { errored = true; out.destroy(err); ssh2sftp.close(handle, () => {}); return; }
+            pending.set(idx, buf.slice(0, bytesRead));
+            tryEmit();
+            scheduleReads();
+          });
+        }
+      }
+
+      scheduleReads();
+      return { stream: out, size };
     },
     async close() { await sftp.end().catch(() => {}); },
   };
