@@ -21,7 +21,11 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer);
+const io = new Server(httpServer, {
+  transports: ['polling'],
+  pingTimeout: 120000,  // 2 min — keeps connection alive through long R2 uploads
+  pingInterval: 10000,
+});
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
@@ -276,11 +280,12 @@ async function runPipeline(jobId) {
   let streamUrl = `/api/stream/${jobId}`;
 
   if (r2Configured) {
-    emit({ status: 'uploading', message: 'Uploading to Cloudflare R2…' });
+    emit({ status: 'uploading', progress: 0, message: 'Uploading to Cloudflare R2…' });
     const key = `movies/${jobId}/${path.basename(finalPath)}`;
-    await uploadToR2(finalPath, key);
+    await uploadToR2(finalPath, key, (pct) => {
+      emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
+    });
     streamUrl = getStreamUrl(key);
-    // Clean up local file after successful R2 upload to save VM disk space
     fs.unlink(finalPath, () => {});
   }
 

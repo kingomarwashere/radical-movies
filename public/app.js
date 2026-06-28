@@ -66,8 +66,8 @@ const videoEl      = $('videoEl');
 
 // ── Socket setup ───────────────────────────────────────────────────────────
 function initSocket() {
-  // Use polling as primary transport — works reliably through Cloudflare Worker proxy
-  socket = io({ transports: ['polling', 'websocket'] });
+  // Polling only — WebSocket doesn't proxy through the Cloudflare Worker
+  socket = io({ transports: ['polling'] });
 
   socket.on('job:update', (job) => {
     if (job.id !== currentJobId) return;

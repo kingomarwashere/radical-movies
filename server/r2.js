@@ -1,4 +1,5 @@
 import fs from 'fs';
+import https from 'https';
 import path from 'path';
 
 const ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -10,29 +11,52 @@ const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/
 
 export const r2Configured = !!(ACCOUNT_ID && CF_TOKEN);
 
-export async function uploadToR2(localPath, key) {
-  if (!r2Configured) throw new Error('R2 not configured');
+// Use Node's https module directly — fetch drops large ReadStream bodies silently
+export function uploadToR2(localPath, key, onProgress) {
+  if (!r2Configured) return Promise.reject(new Error('R2 not configured'));
 
-  const stat = fs.statSync(localPath);
-  const body = fs.createReadStream(localPath);
+  return new Promise((resolve, reject) => {
+    const stat    = fs.statSync(localPath);
+    const total   = stat.size;
+    const url     = new URL(`${CF_R2_BASE}/${encodeURIComponent(key)}`);
 
-  const res = await fetch(`${CF_R2_BASE}/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${CF_TOKEN}`,
-      'Content-Type': 'video/mp4',
-      'Content-Length': String(stat.size),
-    },
-    body,
-    duplex: 'half',
+    const req = https.request({
+      hostname: url.hostname,
+      path:     url.pathname,
+      method:   'PUT',
+      headers: {
+        'Authorization': `Bearer ${CF_TOKEN}`,
+        'Content-Type':  'video/mp4',
+        'Content-Length': String(total),
+      },
+      timeout: 10 * 60 * 1000, // 10 min for very large files
+    }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(key);
+        } else {
+          reject(new Error(`R2 ${res.statusCode}: ${body.slice(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('R2 upload timed out'));
+    });
+    req.on('error', reject);
+
+    let uploaded = 0;
+    const stream = fs.createReadStream(localPath);
+    stream.on('data', (chunk) => {
+      uploaded += chunk.length;
+      if (onProgress) onProgress(Math.floor(uploaded / total * 100));
+    });
+    stream.on('error', reject);
+    stream.pipe(req);
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`R2 upload failed ${res.status}: ${err}`);
-  }
-
-  return key;
 }
 
 export function getStreamUrl(key) {

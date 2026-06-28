@@ -1,4 +1,4 @@
-const socket = io({ transports: ['polling', 'websocket'] });
+const socket = io({ transports: ['polling'] });
 const connDot = document.getElementById('connDot');
 
 socket.on('connect',    () => connDot.classList.add('connected'));
