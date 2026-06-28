@@ -21,6 +21,68 @@ const MIME = {
   '.mov':  'video/quicktime',
 };
 
+// ── Stream upload: SFTP (or any Readable) → R2 multipart, no local disk ─────
+export async function uploadStreamToR2(readable, totalSize, key, ext, onProgress) {
+  if (!r2Configured) throw new Error('R2 not configured');
+
+  const contentType = MIME[ext?.toLowerCase()] || 'video/mp4';
+  console.log(`[r2] stream upload: ${key} — ${(totalSize/1e9).toFixed(2)} GB`);
+
+  const baseUrl = `${UPLOAD_URL}/upload`;
+  const params  = (extra = {}) => `${baseUrl}?${new URLSearchParams({ key, ...extra })}`;
+  const headers = { 'x-upload-secret': UPLOAD_SECRET };
+
+  const createRes = await fetch(params({ action: 'create', contentType }), {
+    method: 'POST', headers,
+  });
+  if (!createRes.ok) throw new Error(`R2 create failed: ${createRes.status}: ${await createRes.text()}`);
+  const { uploadId } = await createRes.json();
+
+  const parts    = [];
+  let   partNum  = 0;
+  let   uploaded = 0;
+  let   buf      = Buffer.alloc(0);
+
+  async function flushPart(chunk) {
+    partNum++;
+    console.log(`[r2] part ${partNum} (${(chunk.length/1e6).toFixed(0)} MB)`);
+    const res = await fetch(params({ action: 'part', uploadId, partNumber: String(partNum) }), {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/octet-stream' },
+      body: chunk,
+    });
+    if (!res.ok) throw new Error(`R2 part ${partNum} failed: ${res.status}: ${await res.text()}`);
+    const { etag } = await res.json();
+    parts.push({ partNumber: partNum, etag });
+    uploaded += chunk.length;
+    onProgress?.(Math.floor(uploaded / totalSize * 100));
+  }
+
+  try {
+    for await (const chunk of readable) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : Buffer.from(chunk);
+      while (buf.length >= PART_SIZE) {
+        await flushPart(buf.slice(0, PART_SIZE));
+        buf = buf.slice(PART_SIZE);
+      }
+    }
+    if (buf.length > 0) await flushPart(buf);
+
+    const completeRes = await fetch(params({ action: 'complete', uploadId }), {
+      method:  'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body:    JSON.stringify({ parts }),
+    });
+    if (!completeRes.ok) throw new Error(`R2 complete failed: ${completeRes.status}: ${await completeRes.text()}`);
+
+    console.log(`[r2] stream upload complete: ${key}`);
+    return key;
+  } catch (err) {
+    await fetch(params({ action: 'abort', uploadId }), { method: 'DELETE', headers }).catch(() => {});
+    throw err;
+  }
+}
+
 // ── Upload via R2 Worker (supports R2 multipart natively) ───────────────────
 export async function uploadToR2(localPath, key, ext, onProgress) {
   if (!r2Configured) throw new Error('R2 not configured');

@@ -17,10 +17,10 @@ import { searchTL } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, findVideoFile, getSeedboxSavePath,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath, streamFromSftp,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
-import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
+import { uploadToR2, uploadStreamToR2, getStreamUrl, r2Configured, deleteFromR2 } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -317,7 +317,29 @@ async function runPipeline(jobId) {
     emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
     const remoteVideoPath = await findVideoFile(jobId);
 
-    // Pull from seedbox to VM via SFTP
+    if (r2Configured) {
+      // Stream SFTP → R2 directly — no VM disk required
+      const remoteExt = path.extname(remoteVideoPath);
+      const r2Key = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
+      emit({ status: 'uploading', progress: 0, message: 'Streaming seedbox → R2…' });
+      const sftpHandle = streamFromSftp(remoteVideoPath);
+      const { stream, size } = await sftpHandle.open();
+      try {
+        await uploadStreamToR2(stream, size, r2Key, remoteExt, (pct) => {
+          emit({ status: 'uploading', progress: pct, message: `Streaming to R2… ${pct}%` });
+        });
+      } finally {
+        await sftpHandle.close();
+      }
+      if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+      job.status    = 'ready';
+      job.streamUrl = getStreamUrl(r2Key);
+      io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
+      io.to(jobId).emit('job:update', sanitize(job));
+      return;
+    }
+
+    // No R2 — pull to VM disk for local serving / transcoding
     const localJobDir = path.join(DOWNLOADS_DIR, jobId);
     fs.mkdirSync(localJobDir, { recursive: true });
     const localPath = path.join(localJobDir, path.basename(remoteVideoPath));
@@ -329,7 +351,6 @@ async function runPipeline(jobId) {
 
     job._rawPath = localPath;
 
-    // Clean up seedbox
     if (torrentHash) {
       await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
     }
