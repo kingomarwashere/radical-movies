@@ -296,41 +296,42 @@ async function runPipeline(jobId) {
     });
   });
 
-  emit({ status: 'processing', progress: 100, message: 'Processing video file…' });
-
-  // 3. Process / transcode only if needed
   const rawPath = job._rawPath;
-  let finalPath = rawPath;
-  const ffmpegOk = await isFfmpegAvailable().catch(() => false);
-
-  if (ffmpegOk) {
-    const outPath = rawPath.replace(/\.[^.]+$/, '_web.mp4');
-    if (needsTranscode(rawPath)) {
-      // MKV, AVI, etc — transcode to MP4 (stream-copy video first, re-encode audio)
-      emit({ message: 'Transcoding to web MP4…' });
-      finalPath = await transcodeToMP4(rawPath, outPath);
-    } else if (getExt(rawPath) === '.mp4') {
-      // Already MP4 — just add faststart moov atom for instant browser streaming
-      emit({ message: 'Optimising MP4 for streaming…' });
-      finalPath = await fastStartMP4(rawPath, outPath);
-    }
-  } else if (needsTranscode(rawPath)) {
-    console.warn('[warn] ffmpeg not found — serving original file (may not play in browser)');
-  }
-
-  job.localPath = finalPath;
-
-  // 4. Upload to R2 (optional)
+  const rawExt  = getExt(rawPath);
   let streamUrl = `/api/stream/${jobId}`;
 
   if (r2Configured) {
-    emit({ status: 'uploading', progress: 0, message: 'Uploading to Cloudflare R2…' });
-    const key = `movies/${jobId}/${path.basename(finalPath)}`;
-    await uploadToR2(finalPath, key, (pct) => {
+    // When R2 is configured: skip transcoding entirely — upload the raw file directly.
+    // MKV (H.264) plays natively in Chrome, Firefox, Edge via the R2 streaming Worker
+    // which handles byte-range requests. Transcoding doubles disk usage and isn't needed.
+    emit({ status: 'uploading', progress: 0, message: `Uploading ${rawExt} to R2…` });
+    const key = `movies/${jobId}/${path.basename(rawPath)}`;
+    console.log(`[pipeline] uploading raw file to R2: ${key} (${rawExt})`);
+    await uploadToR2(rawPath, key, rawExt, (pct) => {
       emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
     });
     streamUrl = getStreamUrl(key);
-    fs.unlink(finalPath, () => {});
+    fs.unlink(rawPath, () => {});
+    console.log('[pipeline] local file deleted after R2 upload');
+  } else {
+    // No R2 — serve locally. Transcode MKV→MP4 for browser compatibility.
+    emit({ status: 'processing', progress: 100, message: 'Processing video…' });
+    const ffmpegOk = await isFfmpegAvailable().catch(() => false);
+    let finalPath = rawPath;
+
+    if (ffmpegOk) {
+      const outPath = rawPath.replace(/\.[^.]+$/, '_web.mp4');
+      if (needsTranscode(rawPath)) {
+        emit({ message: 'Transcoding to MP4 for local streaming…' });
+        finalPath = await transcodeToMP4(rawPath, outPath);
+        fs.unlink(rawPath, () => {}); // delete raw after transcode
+      } else if (rawExt === '.mp4') {
+        emit({ message: 'Optimising MP4…' });
+        finalPath = await fastStartMP4(rawPath, outPath);
+        fs.unlink(rawPath, () => {});
+      }
+    }
+    job.localPath = finalPath;
   }
 
   // 5. Done

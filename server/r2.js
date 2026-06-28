@@ -12,8 +12,19 @@ const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/
 export const r2Configured = !!(ACCOUNT_ID && CF_TOKEN);
 
 // Use Node's https module directly — fetch drops large ReadStream bodies silently
-export function uploadToR2(localPath, key, onProgress) {
+const MIME = {
+  '.mp4':  'video/mp4',
+  '.m4v':  'video/mp4',
+  '.mkv':  'video/x-matroska',
+  '.webm': 'video/webm',
+  '.avi':  'video/x-msvideo',
+  '.mov':  'video/quicktime',
+};
+
+export function uploadToR2(localPath, key, ext, onProgress) {
   if (!r2Configured) return Promise.reject(new Error('R2 not configured'));
+
+  const contentType = MIME[ext?.toLowerCase()] || 'video/mp4';
 
   return new Promise((resolve, reject) => {
     const stat    = fs.statSync(localPath);
@@ -26,7 +37,7 @@ export function uploadToR2(localPath, key, onProgress) {
       method:   'PUT',
       headers: {
         'Authorization': `Bearer ${CF_TOKEN}`,
-        'Content-Type':  'video/mp4',
+        'Content-Type':  contentType,
         'Content-Length': String(total),
       },
       timeout: 10 * 60 * 1000, // 10 min for very large files
