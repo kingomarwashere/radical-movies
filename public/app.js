@@ -69,9 +69,16 @@ function initSocket() {
   // Polling only — WebSocket doesn't proxy through the Cloudflare Worker
   socket = io({ transports: ['polling'] });
 
+  // Re-join on reconnect so we get the latest job state if we missed events
+  socket.on('connect', () => {
+    if (currentJobId) socket.emit('watch:join', currentJobId);
+  });
+
   socket.on('job:update', (job) => {
     if (job.id !== currentJobId) return;
     updateFetchUI(job);
+    // Recover if we missed the job:ready event (e.g. reconnect after upload completed)
+    if (job.status === 'ready' && job.streamUrl) openPlayer(job.streamUrl, job.title);
   });
 
   socket.on('job:ready', ({ jobId, streamUrl, title }) => {
