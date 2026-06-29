@@ -19,8 +19,9 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  streamTranscodeToR2, probeRemoteAudioCodec,
+  streamTranscodeToR2, probeRemoteFileAudio,
 } from './seedbox.js';
+import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 
@@ -148,10 +149,14 @@ app.post('/api/watch', async (req, res) => {
   const activeCount = [...jobs.values()].filter(j => ['searching','downloading','uploading'].includes(j.status)).length;
   if (activeCount >= MAX_QUEUE) return res.status(429).json({ error: `Queue full (${MAX_QUEUE} max). Wait for a slot.` });
 
-  // Dedup: return existing job if we already have this movie
+  // Dedup: return existing job if we already have this content.
+  // TV episodes must match on season+episode too — tmdbId is the same for the whole show.
   for (const [id, job] of jobs) {
-    const match = (tmdbId && job.tmdbId === tmdbId) ||
-                  (job.title?.toLowerCase() === title?.toLowerCase() && String(job.year) === String(year));
+    const isTv = type === 'tv';
+    const match = isTv
+      ? (job.type === 'tv' && job.tmdbId === tmdbId && job.season === season && job.episode === episode)
+      : ((tmdbId && job.tmdbId === tmdbId) ||
+         (job.title?.toLowerCase() === title?.toLowerCase() && String(job.year) === String(year)));
     if (!match) continue;
 
     if (job.status === 'ready' && job.streamUrl) {
@@ -401,7 +406,18 @@ async function runPipeline(jobId) {
     torrent = await searchTLEpisode(job.showTitle, job.season, job.episode).catch(e => { console.error('[tl]', e.message); return null; });
 
     if (!torrent) {
-      emit({ message: 'Not on TL — trying The Pirate Bay…' });
+      // Look up IMDB ID from TMDB so EZTV can search by ID (not name — much more reliable)
+      let imdbId = null;
+      if (job.tmdbId) {
+        imdbId = await tmdb.getTVExternalIds(job.tmdbId)
+          .then(r => r?.imdb_id).catch(() => null);
+      }
+      emit({ message: `Not on TL — trying EZTV${imdbId ? ` (${imdbId})` : ''}…` });
+      torrent = await searchEZTV(imdbId, job.season, job.episode).catch(e => { console.error('[eztv]', e.message); return null; });
+    }
+
+    if (!torrent) {
+      emit({ message: 'Not on EZTV — trying The Pirate Bay…' });
       torrent = await searchTPBEpisode(job.showTitle, job.season, job.episode).catch(e => { console.error('[tpb]', e.message); return null; });
     }
   } else {
@@ -454,15 +470,15 @@ async function runPipeline(jobId) {
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
 
-      // Probe audio codec on the seedbox. If incompatible with browsers (DTS, EAC3, TrueHD, etc.)
-      // or if ffprobe is unavailable and the container is not MP4, transcode audio→AAC and remux
-      // to fragmented MP4 — required for Safari (which rejects MKV) and Brave (which can't decode DTS).
-      emit({ status: 'uploading', progress: 0, message: 'Checking audio compatibility…' });
-      const audioCodec = await probeRemoteAudioCodec(remoteVideoPath);
+      // Download first 1 MB of the remote file and run ffprobe locally to detect the audio codec.
+      // This is fast (~100ms) and lets us skip unnecessary transcodes for already-compatible audio.
+      // Falls back to extension heuristic if probe fails.
+      emit({ status: 'uploading', progress: 0, message: 'Probing audio codec…' });
+      const audioCodec = await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
       const SAFE_AUDIO = new Set(['aac', 'ac3', 'mp3', 'opus', 'vorbis']);
       const needsAudioFix = audioCodec !== null
         ? !SAFE_AUDIO.has(audioCodec)
-        : remoteExt !== '.mp4'; // ffprobe unavailable — assume non-MP4 needs transcode
+        : remoteExt !== '.mp4'; // probe failed — assume non-MP4 needs transcode
 
       console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown (ffprobe unavailable)'} → ${needsAudioFix ? 'transcode' : 'fast upload'}`);
 

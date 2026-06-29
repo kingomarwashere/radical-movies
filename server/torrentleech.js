@@ -293,7 +293,7 @@ export async function searchTLEpisode(showTitle, season, episode) {
       const n = t.name.toLowerCase();
       const hasTag   = n.includes(tagLower);
       const hasTitle = titleRe.test(t.name);
-      return hasTag && hasTitle && !n.includes('remux') && !FOREIGN_RE.test(t.name) && parseInt(t.size || 0) <= 4 * GB && audioScore(t) < 2;
+      return hasTag && hasTitle && !n.includes('remux') && !FOREIGN_RE.test(t.name) && parseInt(t.size || 0) <= 4 * GB;
     })
     .sort((a, b) => audioScore(a) - audioScore(b) || (b.seeders || 0) - (a.seeders || 0));
 

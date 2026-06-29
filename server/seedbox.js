@@ -449,7 +449,7 @@ export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2S
   await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
 
   // ssh2's raw SFTP session — exposes createReadStream with proper backpressure
-  const sftpReadable = sftp.sftp.createReadStream(remotePath, { readAheadCount: 16 });
+  const sftpReadable = sftp.sftp.createReadStream(remotePath, { readAheadCount: 64 });
 
   const ff = spawn('ffmpeg', [
     '-loglevel', 'error',
@@ -752,6 +752,50 @@ export async function parallelSftpToR2(remotePath, fileSize, r2BaseUrl, r2Secret
       s.sftp.close(handle, () => {});
       await s.end().catch(() => {});
     }
+  }
+}
+
+// Download the first 1 MB of a remote file via SFTP, run ffprobe locally,
+// return the primary audio codec name ('aac', 'ac3', 'dts', 'eac3', …) or null.
+// 1 MB is enough to cover MKV/MP4 track headers for all standard releases.
+export async function probeRemoteFileAudio(remotePath, tempDir = '/tmp') {
+  const tmpFile = path.join(tempDir, `probe-${Date.now()}.hdr`);
+  try {
+    const sftp = new SftpClient();
+    await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+    try {
+      await new Promise((resolve, reject) => {
+        const rs = sftp.sftp.createReadStream(remotePath, { start: 0, end: 1024 * 1024 - 1 });
+        const ws = fs.createWriteStream(tmpFile);
+        rs.on('error', reject);
+        ws.on('error', reject);
+        ws.on('finish', resolve);
+        rs.pipe(ws);
+      });
+    } finally {
+      await sftp.end().catch(() => {});
+    }
+
+    const codec = await new Promise((resolve) => {
+      const ff = spawn('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        tmpFile,
+      ]);
+      let out = '';
+      ff.stdout.on('data', d => { out += d; });
+      ff.on('close', () => resolve(out.trim().toLowerCase() || null));
+    });
+
+    console.log(`[probe] remote audio: ${codec ?? 'undetected'} (${path.basename(remotePath)})`);
+    return codec;
+  } catch (err) {
+    console.warn('[probe] failed:', err.message);
+    return null;
+  } finally {
+    fs.unlink(tmpFile, () => {});
   }
 }
 
