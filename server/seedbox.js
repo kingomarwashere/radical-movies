@@ -263,7 +263,7 @@ CHUNK  = 64 * 1024 * 1024
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = f"{BASE}?action={action}&key={quote(KEY,safe='')}{extra}"
-    hdrs = {'x-upload-secret': SECRET}
+    hdrs = {'x-upload-secret': SECRET, 'User-Agent': 'curl/7.88.1'}
     if ct: hdrs['content-type'] = ct
     with urlopen(Request(url, data=data, method=method, headers=hdrs)) as r:
         return json.loads(r.read())
@@ -856,7 +856,7 @@ CODEC  = ${JSON.stringify(codecArgs)}
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
-    hdrs = {'x-upload-secret': SECRET}
+    hdrs = {'x-upload-secret': SECRET, 'User-Agent': 'curl/7.88.1'}
     if ct: hdrs['content-type'] = ct
     with urlopen(Request(url, data=data, method=method, headers=hdrs), timeout=120) as r:
         return json.loads(r.read())
