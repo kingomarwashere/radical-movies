@@ -109,7 +109,7 @@ function audioScore(t) {
   const n = (t.name || '').toLowerCase();
   if (n.includes('.mp4') || n.includes(' mp4')) return 0;
   if (n.includes('aac'))                         return 0;
-  if (/\bdts\b|eac3|e-ac3|\bddp\b|dd\+|truehd|atmos/.test(n)) return 2;
+  if (/\bdts\b|eac3|e-ac3|\bddp|dd\+|truehd|atmos/.test(n)) return 2;
   return 1; // AC3/DD — works in Chrome/Safari on Mac
 }
 
