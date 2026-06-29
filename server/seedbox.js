@@ -430,10 +430,11 @@ export async function findVideoFile(jobId, torrentHash) {
   }
 }
 
-// ── SFTP stream → ffmpeg (audio→AAC) → R2, zero disk ────────────────────────
-// Pipes the remote file directly into ffmpeg stdin — no temp file written to disk.
-// Supports concurrent jobs without ENOSPC regardless of file size.
-export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+// ── Internal: SFTP stream → ffmpeg → R2, zero disk ──────────────────────────
+// codecArgs controls what ffmpeg does with the streams.
+// Remux:     ['-c', 'copy']                              — I/O bound, very fast
+// Transcode: ['-c:v','copy','-c:a','aac','-b:a','192k','-ac','2'] — CPU for audio
+async function _streamFfmpegToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, codecArgs, onProgress, logTag = 'stream') {
   const mime   = 'video/mp4';
   const PART   = 16 * 1024 * 1024;
   const CONC   = 4;
@@ -448,14 +449,12 @@ export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2S
   const sftp = new SftpClient();
   await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
 
-  // ssh2's raw SFTP session — exposes createReadStream with proper backpressure
   const sftpReadable = sftp.sftp.createReadStream(remotePath, { readAheadCount: 64 });
 
   const ff = spawn('ffmpeg', [
     '-loglevel', 'error',
     '-i', 'pipe:0',
-    '-c:v', 'copy',
-    '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+    ...codecArgs,
     '-f', 'mp4',
     '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
     'pipe:1',
@@ -489,7 +488,7 @@ export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2S
       const { etag } = await res.json();
       uploaded += chunk.length;
       onProgress?.(Math.round(uploaded / fileSize * 100));
-      console.log(`[r2] stream part ${pn} (${(chunk.length / 1e6).toFixed(0)} MB)`);
+      console.log(`[r2] ${logTag} part ${pn} (${(chunk.length / 1e6).toFixed(0)} MB)`);
       return { partNumber: pn, etag };
     })();
   }
@@ -517,7 +516,7 @@ export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2S
       body: JSON.stringify({ parts }),
     });
     if (!done.ok) throw new Error(`R2 complete: ${await done.text()}`);
-    console.log(`[r2] stream-transcode complete: ${r2Key}`);
+    console.log(`[r2] ${logTag} complete: ${r2Key}`);
 
   } catch (err) {
     await fetch(mkUrl('abort', { uploadId }), { method: 'DELETE', headers: r2h }).catch(() => {});
@@ -526,6 +525,21 @@ export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2S
   } finally {
     await sftp.end().catch(() => {});
   }
+}
+
+// Remux MKV → fragmented MP4 without re-encoding anything.
+// Use when audio is already browser-compatible (AAC, AC3).
+// I/O bound only — much faster than audio transcode.
+export function streamRemuxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  return _streamFfmpegToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
+    ['-c', 'copy'], onProgress, 'remux');
+}
+
+// Remux MKV → fragmented MP4 and transcode audio to AAC.
+// Use when audio is DTS / EAC3 / other codec browsers can't decode.
+export function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  return _streamFfmpegToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
+    ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2'], onProgress, 'transcode');
 }
 
 // ── fastGet → disk → ffmpeg (audio→AAC) → R2 ──────────────────────────────

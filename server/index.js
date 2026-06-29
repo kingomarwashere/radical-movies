@@ -19,7 +19,7 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  streamTranscodeToR2, probeRemoteFileAudio,
+  streamRemuxToR2, streamTranscodeToR2, probeRemoteFileAudio,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
@@ -480,32 +480,32 @@ async function runPipeline(jobId) {
         ? !SAFE_AUDIO.has(audioCodec)
         : remoteExt !== '.mp4'; // probe failed — assume non-MP4 needs transcode
 
-      console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown (ffprobe unavailable)'} → ${needsAudioFix ? 'transcode' : 'fast upload'}`);
+      const baseName = path.basename(remoteVideoPath, remoteExt);
+      let r2Key, uploadMsg, uploadFn;
 
       if (needsAudioFix) {
-        // Stream SFTP → ffmpeg (-c:v copy -c:a aac) → R2 as fMP4 — no local disk needed.
-        const baseName = path.basename(remoteVideoPath, remoteExt);
-        const r2Key    = `movies/${jobId}/${baseName}.mp4`;
-        emit({ status: 'uploading', progress: 0, message: `Transcoding audio (${audioCodec ?? 'unknown'} → AAC) & uploading…` });
-        await streamTranscodeToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
-          emit({ status: 'uploading', progress: pct, message: `Transcoding & uploading… ${pct}%` });
-        });
-        job.status    = 'ready';
-        job.readyAt   = Date.now();
-        job.r2Key     = r2Key;
-        job.streamUrl = getStreamUrl(r2Key);
-        saveJobs();
-        io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
-        io.to(jobId).emit('job:update', sanitize(job));
-        return;
+        // DTS / EAC3 / unknown non-MP4: transcode audio to AAC, remux to fMP4
+        r2Key     = `movies/${jobId}/${baseName}.mp4`;
+        uploadMsg = `Transcoding audio (${audioCodec ?? 'unknown'} → AAC) & uploading…`;
+        uploadFn  = (cb) => streamTranscodeToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+        console.log(`[pipeline] audio: transcode (${audioCodec ?? 'unknown'} → aac)`);
+      } else if (remoteExt !== '.mp4') {
+        // AC3 / AAC in MKV: fast container remux only — no audio re-encode, I/O bound
+        r2Key     = `movies/${jobId}/${baseName}.mp4`;
+        uploadMsg = `Remuxing to MP4 (${audioCodec ?? 'ac3'} audio, no transcode)…`;
+        uploadFn  = (cb) => streamRemuxToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+        console.log(`[pipeline] audio: fast remux (${audioCodec}, no transcode)`);
+      } else {
+        // Already MP4 + compatible audio: parallel direct upload, fastest path
+        r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
+        uploadMsg = 'Uploading to R2…';
+        uploadFn  = (cb) => parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, cb);
+        console.log(`[pipeline] audio: direct upload (${audioCodec}, already mp4)`);
       }
 
-      // Audio already compatible → fast parallel SFTP→R2 upload (no VM disk touch)
-      const r2Key = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
-      emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
-      await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
-        emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
-      });
+      emit({ status: 'uploading', progress: 0, message: uploadMsg });
+      await uploadFn((pct) => emit({ status: 'uploading', progress: pct, message: `${uploadMsg.replace('…', '')} ${pct}%` }));
+
       job.status    = 'ready';
       job.readyAt   = Date.now();
       job.r2Key     = r2Key;
