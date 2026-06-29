@@ -144,7 +144,7 @@ app.post('/api/watch', async (req, res) => {
   if (!title) return res.status(400).json({ error: 'title required' });
 
   // Queue limit
-  const MAX_QUEUE = 10;
+  const MAX_QUEUE = 25;
   const activeCount = [...jobs.values()].filter(j => ['searching','downloading','uploading'].includes(j.status)).length;
   if (activeCount >= MAX_QUEUE) return res.status(429).json({ error: `Queue full (${MAX_QUEUE} max). Wait for a slot.` });
 
