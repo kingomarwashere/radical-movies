@@ -287,10 +287,12 @@ api('complete', f'&uploadId={uid}', 'POST', json.dumps({'parts': parts}).encode(
 sys.stdout.write(json.dumps({'done': True}) + '\\n'); sys.stdout.flush()
 `;
 
+  const pyB64 = Buffer.from(py).toString('base64');
+
   return new Promise((resolve, reject) => {
     const conn = new SSH2Client();
     conn.on('ready', () => {
-      conn.exec(`python3 -c ${JSON.stringify(py)}`, (err, stream) => {
+      conn.exec(`echo '${pyB64}' | base64 -d | python3`, (err, stream) => {
         if (err) { conn.end(); return reject(err); }
         let lineBuf = '';
         let stderr  = '';
@@ -891,10 +893,15 @@ except Exception as e:
     sys.exit(1)
 `;
 
+  // Base64-encode the script to avoid all shell quoting/newline issues.
+  // bash receives: echo 'BASE64' | base64 -d | python3
+  // Python gets the script with real newlines, no escaping problems.
+  const pyB64 = Buffer.from(py).toString('base64');
+
   return new Promise((resolve, reject) => {
     const conn = new SSH2Client();
     conn.on('ready', () => {
-      conn.exec(`python3 -c ${JSON.stringify(py)}`, (err, stream) => {
+      conn.exec(`echo '${pyB64}' | base64 -d | python3`, (err, stream) => {
         if (err) { conn.end(); return reject(err); }
         let lineBuf = '', stderr = '';
         stream.stdout.on('data', (data) => {
