@@ -430,6 +430,104 @@ export async function findVideoFile(jobId, torrentHash) {
   }
 }
 
+// ── SFTP stream → ffmpeg (audio→AAC) → R2, zero disk ────────────────────────
+// Pipes the remote file directly into ffmpeg stdin — no temp file written to disk.
+// Supports concurrent jobs without ENOSPC regardless of file size.
+export async function streamTranscodeToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  const mime   = 'video/mp4';
+  const PART   = 16 * 1024 * 1024;
+  const CONC   = 4;
+  const mkUrl  = (action, extra = {}) =>
+    `${r2UploadUrl}?${new URLSearchParams({ action, key: r2Key, ...extra })}`;
+  const r2h = { 'x-upload-secret': r2Secret };
+
+  const cr = await fetch(mkUrl('create', { contentType: mime }), { method: 'POST', headers: r2h });
+  if (!cr.ok) throw new Error(`R2 create: ${await cr.text()}`);
+  const { uploadId } = await cr.json();
+
+  const sftp = new SftpClient();
+  await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+
+  // ssh2's raw SFTP session — exposes createReadStream with proper backpressure
+  const sftpReadable = sftp.sftp.createReadStream(remotePath, { readAheadCount: 16 });
+
+  const ff = spawn('ffmpeg', [
+    '-loglevel', 'error',
+    '-i', 'pipe:0',
+    '-c:v', 'copy',
+    '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+    '-f', 'mp4',
+    '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+    'pipe:1',
+  ]);
+  let ffErr = '';
+  ff.stderr.on('data', d => { ffErr += d; });
+  const ffClose = new Promise((res, rej) =>
+    ff.on('close', code => code === 0 ? res() : rej(new Error(`ffmpeg exit ${code}: ${ffErr.slice(-400)}`)))
+  );
+
+  sftpReadable.pipe(ff.stdin);
+  sftpReadable.on('error', () => { ff.kill(); });
+  ff.stdin.on('error', () => {});  // ignore EPIPE when ffmpeg exits early
+
+  const parts    = [];
+  const inFlight = [];
+  let   partNum  = 0;
+  let   uploaded = 0;
+  let   buf      = Buffer.alloc(0);
+
+  function startPart(chunk) {
+    const pn = ++partNum;
+    return (async () => {
+      const res = await fetch(mkUrl('part', { uploadId, partNumber: String(pn) }), {
+        method: 'PUT',
+        headers: { ...r2h, 'content-type': 'application/octet-stream' },
+        body: chunk,
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) throw new Error(`R2 part ${pn}: ${await res.text()}`);
+      const { etag } = await res.json();
+      uploaded += chunk.length;
+      onProgress?.(Math.round(uploaded / fileSize * 100));
+      console.log(`[r2] stream part ${pn} (${(chunk.length / 1e6).toFixed(0)} MB)`);
+      return { partNumber: pn, etag };
+    })();
+  }
+
+  try {
+    for await (const chunk of ff.stdout) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : Buffer.from(chunk);
+      while (buf.length >= PART) {
+        if (inFlight.length >= CONC) parts.push(await inFlight.shift());
+        inFlight.push(startPart(Buffer.from(buf.slice(0, PART))));
+        buf = buf.slice(PART);
+      }
+    }
+    if (buf.length > 0) {
+      if (inFlight.length >= CONC) parts.push(await inFlight.shift());
+      inFlight.push(startPart(buf));
+    }
+    for (const p of inFlight) parts.push(await p);
+
+    await ffClose;
+
+    parts.sort((a, b) => a.partNumber - b.partNumber);
+    const done = await fetch(mkUrl('complete', { uploadId }), {
+      method: 'POST', headers: { ...r2h, 'content-type': 'application/json' },
+      body: JSON.stringify({ parts }),
+    });
+    if (!done.ok) throw new Error(`R2 complete: ${await done.text()}`);
+    console.log(`[r2] stream-transcode complete: ${r2Key}`);
+
+  } catch (err) {
+    await fetch(mkUrl('abort', { uploadId }), { method: 'DELETE', headers: r2h }).catch(() => {});
+    if (ff.exitCode === null) ff.kill();
+    throw err;
+  } finally {
+    await sftp.end().catch(() => {});
+  }
+}
+
 // ── fastGet → disk → ffmpeg (audio→AAC) → R2 ──────────────────────────────
 // fastGet uses 64+ concurrent SSH reads = ~35 MB/s vs 4 MB/s for streaming.
 // ffmpeg reads from disk (unconstrained), outputs to R2 via concurrent part uploads.

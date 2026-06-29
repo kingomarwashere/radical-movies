@@ -19,7 +19,7 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  transcodeAudioAndUploadToR2, probeRemoteAudioCodec,
+  streamTranscodeToR2, probeRemoteAudioCodec,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
@@ -467,16 +467,13 @@ async function runPipeline(jobId) {
       console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown (ffprobe unavailable)'} → ${needsAudioFix ? 'transcode' : 'fast upload'}`);
 
       if (needsAudioFix) {
-        // Audio transcode: fastGet to VM disk → ffmpeg (-c:v copy -c:a aac) → R2 as fMP4
+        // Stream SFTP → ffmpeg (-c:v copy -c:a aac) → R2 as fMP4 — no local disk needed.
         const baseName = path.basename(remoteVideoPath, remoteExt);
         const r2Key    = `movies/${jobId}/${baseName}.mp4`;
-        emit({ status: 'uploading', progress: 0, message: `Audio (${audioCodec ?? 'unknown'}) needs transcode — pulling from seedbox…` });
-        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
-          const msg = pct <= 50
-            ? `Pulling from seedbox… ${pct * 2}%`
-            : `Transcoding audio & uploading… ${(pct - 50) * 2}%`;
-          emit({ status: 'uploading', progress: pct, message: msg });
-        }, DOWNLOADS_DIR);
+        emit({ status: 'uploading', progress: 0, message: `Transcoding audio (${audioCodec ?? 'unknown'} → AAC) & uploading…` });
+        await streamTranscodeToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
+          emit({ status: 'uploading', progress: pct, message: `Transcoding & uploading… ${pct}%` });
+        });
         job.status    = 'ready';
         job.readyAt   = Date.now();
         job.r2Key     = r2Key;

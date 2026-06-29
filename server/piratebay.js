@@ -46,10 +46,15 @@ function makeTitleRe(title) {
   const words = title.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return /.*/;
   return new RegExp(
-    words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[.\\s_\\-]+'),
+    words.map(w => w
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/'/g, "'?")
+    ).join('[.\\s_\\-]+'),
     'i'
   );
 }
+
+const MAX_BYTES = 4 * 1024 ** 3;
 
 export async function searchTPB(title, year) {
   // Progressive attempts: HD with year → HD no year → all Video with year → all Video no year
@@ -64,15 +69,16 @@ export async function searchTPB(title, year) {
     const results = await tpbQuery(q, cat);
     if (!results.length) continue;
 
-    const nonCam = results.filter(isNotCam);
-    if (!nonCam.length) continue;
-
     const titleRe = makeTitleRe(title);
+    const nonCam  = results.filter(t =>
+      isNotCam(t) && isEnglish(t) && titleRe.test(t.name) && parseInt(t.size) <= MAX_BYTES
+    );
+    if (!nonCam.length) continue;
 
     // Prefer HD, fall back to anything seeded
     const hd = nonCam.filter(t => {
       const n = t.name.toLowerCase();
-      return titleRe.test(t.name) && (n.includes('1080p') || n.includes('720p'));
+      return n.includes('1080p') || n.includes('720p');
     }).sort((a, b) => {
       const fDiff = tpbFormatScore(a.name) - tpbFormatScore(b.name);
       return fDiff !== 0 ? fDiff : parseInt(b.seeders) - parseInt(a.seeders);

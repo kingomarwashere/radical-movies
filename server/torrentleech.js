@@ -118,11 +118,15 @@ const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|jap
 
 // Title words must appear in order with only separators between them.
 // "The Boys" → /the[.\s_\-]+boys/i — matches "The.Boys.S04E01" but NOT "The.Invisible.Boys".
+// Apostrophes are made optional so "Schindler's List" matches "Schindlers.List".
 function makeTitleRe(title) {
   const words = title.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return /.*/;
   return new RegExp(
-    words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[.\\s_\\-]+'),
+    words.map(w => w
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/'/g, "'?")
+    ).join('[.\\s_\\-]+'),
     'i'
   );
 }

@@ -38,6 +38,16 @@ async function ytsQuery(query) {
   } catch { return []; }
 }
 
+const MAX_BYTES = 4 * 1024 ** 3;
+
+function parseYtsSize(s) {
+  if (!s) return 0;
+  const m = String(s).match(/([\d.]+)\s*(GB|MB|KB)/i);
+  if (!m) return parseInt(s) || 0;
+  const n = parseFloat(m[1]);
+  return m[2].toUpperCase() === 'GB' ? n * 1e9 : m[2].toUpperCase() === 'MB' ? n * 1e6 : n * 1e3;
+}
+
 export async function searchYTS(title, year) {
   // Try with year first, then title only
   const movies = (await ytsQuery(year ? `${title} ${year}` : title))
@@ -54,7 +64,7 @@ export async function searchYTS(title, year) {
 
   for (const movie of candidates) {
     const torrents = (movie.torrents ?? [])
-      .filter(t => ['1080p', '720p'].includes(t.quality))
+      .filter(t => ['1080p', '720p'].includes(t.quality) && parseYtsSize(t.size) <= MAX_BYTES)
       .sort((a, b) => {
         const fDiff = formatScore(a.type) - formatScore(b.type);
         if (fDiff !== 0) return fDiff;
