@@ -19,7 +19,7 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  streamRemuxToR2, streamTranscodeToR2, probeRemoteFileAudio,
+  remuxOnSeedbox, transcodeOnSeedbox, probeRemoteAudioCodec, probeRemoteFileAudio,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
@@ -470,11 +470,12 @@ async function runPipeline(jobId) {
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
 
-      // Download first 1 MB of the remote file and run ffprobe locally to detect the audio codec.
-      // This is fast (~100ms) and lets us skip unnecessary transcodes for already-compatible audio.
-      // Falls back to extension heuristic if probe fails.
+      // Probe audio codec: try SSH exec on seedbox first (instant, no data transfer).
+      // Fall back to downloading first 1 MB and running local ffprobe on Fly.io.
       emit({ status: 'uploading', progress: 0, message: 'Probing audio codec…' });
-      const audioCodec = await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
+      const audioCodecSSH   = await probeRemoteAudioCodec(remoteVideoPath);
+      const audioCodec      = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
+      console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown'} (via ${audioCodecSSH !== null ? 'ssh' : 'local-ffprobe'})`);
       const SAFE_AUDIO = new Set(['aac', 'ac3', 'mp3', 'opus', 'vorbis']);
       const needsAudioFix = audioCodec !== null
         ? !SAFE_AUDIO.has(audioCodec)
@@ -484,17 +485,17 @@ async function runPipeline(jobId) {
       let r2Key, uploadMsg, uploadFn;
 
       if (needsAudioFix) {
-        // DTS / EAC3 / unknown non-MP4: transcode audio to AAC, remux to fMP4
+        // DTS / EAC3 / unknown non-MP4: transcode audio → AAC on seedbox, output fMP4 to R2
         r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Transcoding audio (${audioCodec ?? 'unknown'} → AAC) & uploading…`;
-        uploadFn  = (cb) => streamTranscodeToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] audio: transcode (${audioCodec ?? 'unknown'} → aac)`);
+        uploadMsg = `Transcoding on seedbox (${audioCodec ?? 'unknown'} → AAC)…`;
+        uploadFn  = (cb) => transcodeOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+        console.log(`[pipeline] transcode on seedbox: ${audioCodec ?? 'unknown'} → aac`);
       } else if (remoteExt !== '.mp4') {
-        // AC3 / AAC in MKV: fast container remux only — no audio re-encode, I/O bound
+        // AC3 / AAC in MKV: container remux only on seedbox — no audio re-encode
         r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Remuxing to MP4 (${audioCodec ?? 'ac3'} audio, no transcode)…`;
-        uploadFn  = (cb) => streamRemuxToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] audio: fast remux (${audioCodec}, no transcode)`);
+        uploadMsg = `Remuxing on seedbox (${audioCodec ?? 'ac3'}, no transcode)…`;
+        uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+        console.log(`[pipeline] remux on seedbox: ${audioCodec}`);
       } else {
         // Already MP4 + compatible audio: parallel direct upload, fastest path
         r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;

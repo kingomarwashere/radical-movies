@@ -36,11 +36,11 @@ function extractInfoHash(buf) {
   return null;
 }
 
-const QB_URL      = process.env.SEEDBOX_QB_URL  || 'https://114.ftl1.seedit4.me/qbittorrent';
+const QB_URL      = process.env.SEEDBOX_QB_URL   || 'https://60.ftl31.seedit4.me/qbittorrent';
 const QB_USER     = process.env.SEEDBOX_USER     || 'seedit4me';
 const QB_PASS     = process.env.SEEDBOX_PASS     || '123456';
-const SFTP_HOST   = process.env.SEEDBOX_SFTP_HOST || 'ftl1.seedit4.me';
-const SFTP_PORT   = parseInt(process.env.SEEDBOX_SFTP_PORT || '2090');
+const SFTP_HOST   = process.env.SEEDBOX_SFTP_HOST || 'ftl31.seedit4.me';
+const SFTP_PORT   = parseInt(process.env.SEEDBOX_SFTP_PORT || '2100');
 const SAVE_PATH   = process.env.SEEDBOX_SAVE_PATH || '/home/seedit4me/torrents/qbittorrent';
 
 export const seedboxConfigured = !!(process.env.SEEDBOX_QB_URL || QB_URL);
@@ -830,6 +830,110 @@ export async function probeRemoteAudioCodec(remotePath) {
     conn.on('error', () => resolve(null));
     conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
   });
+}
+
+// ── ffmpeg on seedbox → R2 ───────────────────────────────────────────────────
+// Runs ffmpeg ON the seedbox via SSH, pipes output straight to R2.
+// Fly.io does zero video work — seedbox disk → seedbox CPU → R2 (NL→EU, fast).
+// codecArgs: ['-c','copy'] for remux, ['-c:v','copy','-c:a','aac',...] for transcode.
+export function ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, codecArgs, onProgress) {
+  const CHUNK = 64 * 1024 * 1024;
+
+  const py = `
+import sys, json, subprocess
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+
+FILE   = ${JSON.stringify(remotePath)}
+KEY    = ${JSON.stringify(r2Key)}
+MIME   = 'video/mp4'
+BASE   = ${JSON.stringify(r2UploadUrl)}
+SECRET = ${JSON.stringify(r2Secret)}
+CHUNK  = ${CHUNK}
+CODEC  = ${JSON.stringify(codecArgs)}
+
+def api(action, extra='', method='GET', data=None, ct=None):
+    url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
+    hdrs = {'x-upload-secret': SECRET}
+    if ct: hdrs['content-type'] = ct
+    with urlopen(Request(url, data=data, method=method, headers=hdrs), timeout=120) as r:
+        return json.loads(r.read())
+
+uid = api('create', '&contentType=' + MIME, 'POST')['uploadId']
+sys.stdout.write(json.dumps({'started': True}) + '\\n'); sys.stdout.flush()
+
+ff = subprocess.Popen(
+    ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
+    ['-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', 'pipe:1'],
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+)
+
+parts = []; pn = 0; done_bytes = 0
+try:
+    while True:
+        chunk = ff.stdout.read(CHUNK)
+        if not chunk: break
+        pn += 1
+        r = api('part', '&uploadId=' + uid + '&partNumber=' + str(pn), 'PUT', chunk, 'application/octet-stream')
+        parts.append({'partNumber': pn, 'etag': r['etag']})
+        done_bytes += len(chunk)
+        sys.stdout.write(json.dumps({'part': pn, 'bytes': done_bytes}) + '\\n'); sys.stdout.flush()
+    ff.wait()
+    if ff.returncode != 0:
+        raise RuntimeError('ffmpeg exit ' + str(ff.returncode) + ': ' + ff.stderr.read().decode(errors='replace')[-300:])
+    api('complete', '&uploadId=' + uid, 'POST', json.dumps({'parts': parts}).encode(), 'application/json')
+    sys.stdout.write(json.dumps({'done': True}) + '\\n'); sys.stdout.flush()
+except Exception as e:
+    ff.kill()
+    try: api('abort', '&uploadId=' + uid, 'DELETE')
+    except: pass
+    sys.stdout.write(json.dumps({'error': str(e)}) + '\\n'); sys.stdout.flush()
+    sys.exit(1)
+`;
+
+  return new Promise((resolve, reject) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`python3 -c ${JSON.stringify(py)}`, (err, stream) => {
+        if (err) { conn.end(); return reject(err); }
+        let lineBuf = '', stderr = '';
+        stream.stdout.on('data', (data) => {
+          lineBuf += data.toString();
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.error) return reject(new Error(`Seedbox ffmpeg: ${msg.error}`));
+              if (msg.bytes !== undefined) onProgress?.(Math.min(99, Math.round(msg.bytes / fileSize * 100)));
+              if (msg.done) resolve();
+            } catch {}
+          }
+        });
+        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+        stream.on('close', (code) => {
+          conn.end();
+          if (code !== 0) reject(new Error(`Seedbox ffmpeg SSH exit ${code}: ${stderr.slice(-300)}`));
+        });
+      });
+    });
+    conn.on('error', reject);
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
+
+// Remux container only (no audio re-encode) — I/O bound, very fast
+export function remuxOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  console.log(`[seedbox] remux on seedbox: ${path.basename(remotePath)}`);
+  return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, ['-c', 'copy'], onProgress);
+}
+
+// Transcode audio to AAC on seedbox — uses seedbox CPU, not Fly.io
+export function transcodeOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
+  console.log(`[seedbox] transcode on seedbox: ${path.basename(remotePath)}`);
+  return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
+    ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2'], onProgress);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
