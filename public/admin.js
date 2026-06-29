@@ -7,6 +7,18 @@ socket.on('connect', () => socket.emit('admin:join'));
 
 socket.on('admin:stats', (data) => render(data));
 
+// R2 storage map: key → { size, lastModified }
+let r2Objects = new Map();
+
+async function fetchR2Objects() {
+  try {
+    const list = await fetch('/api/admin/r2').then(r => r.json());
+    r2Objects = new Map(list.map(o => [o.key, o]));
+  } catch {}
+}
+fetchR2Objects();
+setInterval(fetchR2Objects, 60000); // refresh every minute
+
 // ── Render ─────────────────────────────────────────────────────────────────
 function render({ jobs, streams, disk, server }) {
   renderStats(jobs, streams, disk, server);
@@ -104,15 +116,30 @@ function renderJobs(jobs) {
     const dlTime  = j.downloadedAt ? fmtDuration(j.downloadedAt - j.createdAt)   : '—';
     const upTime  = j.readyAt && j.downloadedAt ? fmtDuration(j.readyAt - j.downloadedAt) : '—';
 
+    // R2 storage status
+    let r2Cell = '<span class="muted mono">—</span>';
+    if (j.r2Key) {
+      const r2obj = r2Objects.get(j.r2Key);
+      if (r2obj) {
+        const gb = (r2obj.size / 1e9).toFixed(2);
+        r2Cell = `<span class="green mono" title="${esc(j.r2Key)}">✓ ${gb} GB</span>`;
+      } else if (j.status === 'ready') {
+        r2Cell = `<span style="color:#f97316" class="mono" title="${esc(j.r2Key)}">⚠ missing</span>`;
+      }
+    } else if (j.status === 'ready' && j.streamUrl) {
+      r2Cell = `<span class="green mono">✓ ready</span>`;
+    }
+
     return `<tr>
       <td>
         <div class="title-cell">${esc(j.title)}</div>
-        <div class="title-year">${j.year || ''}${subMsg ? ' · <span style="color:' + (j.status==='error'?'#e50914':'#888') + '">' + esc(subMsg) + '</span>' : ''}</div>
+        <div class="title-year">${j.year || ''}${subMsg ? ' · <span style="color:' + (j.status==='error'?'var(--red)':'#888') + '">' + esc(subMsg) + '</span>' : ''}</div>
       </td>
       <td><span class="badge badge-${j.status}">${j.status}</span></td>
       <td>${prog}</td>
       <td><span class="mono">${j.quality || '—'}</span></td>
       <td><span class="mono muted">${j.size || '—'}</span></td>
+      <td>${r2Cell}</td>
       <td><span class="mono muted">${j.speed || '—'}</span></td>
       <td><span class="mono muted">${fmtUptime(age)}</span></td>
       <td><span class="mono ${j.downloadedAt ? 'green' : 'muted'}">${dlTime}</span></td>
@@ -139,7 +166,7 @@ let logLines = [];
 function appendLog(line) {
   const ts = new Date().toLocaleTimeString('en-AU', { hour12: false });
   const colored = line.startsWith('[ERR]')
-    ? `<span style="color:#e50914">${esc(line)}</span>`
+    ? `<span style="color:#ff0099">${esc(line)}</span>`
     : line.startsWith('[WARN]')
       ? `<span style="color:#eab308">${esc(line)}</span>`
       : `<span style="color:#666">${esc(ts)}</span> ${esc(line)}`;

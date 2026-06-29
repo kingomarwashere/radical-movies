@@ -27,3 +27,10 @@ export const getByGenre = (id, page = 1) =>
 export const search = (query, page = 1) => get('/search/movie', { query, page });
 export const getMovie = (id) =>
   get(`/movie/${id}`, { append_to_response: 'credits,videos,similar' });
+
+export const getTVTrending = () => get('/trending/tv/week');
+export const getTVPopular = (page = 1) => get('/tv/popular', { page });
+export const getTVTopRated = (page = 1) => get('/tv/top_rated', { page });
+export const searchTV = (query, page = 1) => get('/search/tv', { query, page });
+export const getTVShow = (id) => get(`/tv/${id}`, { append_to_response: 'credits,videos,similar' });
+export const getTVSeason = (id, season) => get(`/tv/${id}/season/${season}`);

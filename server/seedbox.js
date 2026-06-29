@@ -135,7 +135,17 @@ export async function addTorrent(source, savePath) {
     const hashByPath = await getHashBySavePath(jobId, 3000);
     if (hashByPath) { console.log(`[seedbox] duplicate at new path: ${hashByPath}`); return hashByPath; }
 
-    // 2. Extract infohash from the buffer and find any orphaned torrent
+    // 2. For magnet links, find the existing torrent by infohash
+    if (magnetHash) {
+      const res  = await qbt(`/torrents/info?hashes=${magnetHash}`);
+      const list = await res.json();
+      if (list[0]) {
+        console.log(`[seedbox] found duplicate magnet torrent: ${magnetHash} at ${list[0].save_path}`);
+        return magnetHash;
+      }
+    }
+
+    // 3. Extract infohash from the buffer and find any orphaned torrent
     if (Buffer.isBuffer(source)) {
       const knownHash = extractInfoHash(source);
       if (knownHash) {
@@ -249,7 +259,7 @@ KEY    = ${JSON.stringify(r2Key)}
 MIME   = ${JSON.stringify(mime)}
 BASE   = ${JSON.stringify(r2Url + '/upload')}
 SECRET = ${JSON.stringify(r2Secret)}
-CHUNK  = 8 * 1024 * 1024
+CHUNK  = 64 * 1024 * 1024
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = f"{BASE}?action={action}&key={quote(KEY,safe='')}{extra}"
@@ -431,7 +441,7 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
   // the full file is buffered. fMP4 fragments are self-contained so the browser
   // can seek by bisecting byte offsets without any front-loaded index.
   const mime    = 'video/mp4';
-  const PART    = 8 * 1024 * 1024;
+  const PART    = 16 * 1024 * 1024;
   const CONC    = 4;
   const tmpFile = path.join(tempDir, `radical-tmp-${Date.now()}${ext}`);
 
@@ -552,8 +562,8 @@ const MIME_MAP = { '.mkv':'video/x-matroska', '.mp4':'video/mp4', '.m4v':'video/
                    '.webm':'video/webm', '.avi':'video/x-msvideo', '.mov':'video/quicktime' };
 
 export async function parallelSftpToR2(remotePath, fileSize, r2BaseUrl, r2Secret, r2Key, ext, onProgress) {
-  const N_CONN    = 4;              // parallel SFTP connections (= parallel part uploads)
-  const PART_SIZE = 8 * 1024 * 1024; // 8 MB per R2 part
+  const N_CONN    = 8;              // parallel SFTP connections (= parallel part uploads)
+  const PART_SIZE = 64 * 1024 * 1024; // 64 MB per R2 part
   const BLOCK     = 32768;          // 32 KB per SSH read packet
   const SSH_CONC  = 64;             // concurrent SSH reads per connection
   const nParts    = Math.ceil(fileSize / PART_SIZE);
@@ -645,6 +655,25 @@ export async function parallelSftpToR2(remotePath, fileSize, r2BaseUrl, r2Secret
       await s.end().catch(() => {});
     }
   }
+}
+
+// Probe the primary audio codec of a remote file via SSH + ffprobe.
+// Returns codec name (e.g. 'aac', 'ac3', 'dts', 'eac3') or null if ffprobe unavailable.
+export async function probeRemoteAudioCodec(remotePath) {
+  return new Promise((resolve) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      const cmd = `ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 ${JSON.stringify(remotePath)} 2>/dev/null`;
+      conn.exec(cmd, (err, stream) => {
+        if (err) { conn.end(); return resolve(null); }
+        let out = '';
+        stream.stdout.on('data', d => { out += d; });
+        stream.on('close', () => { conn.end(); resolve(out.trim().toLowerCase() || null); });
+      });
+    });
+    conn.on('error', () => resolve(null));
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

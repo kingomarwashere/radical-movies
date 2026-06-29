@@ -102,12 +102,29 @@ function qualScore(name) {
   return 0;
 }
 
-// MP4 releases already have AAC audio and skip the entire transcode pipeline.
-// Prefer them strongly — same quality video, ~half the total processing time.
-function isMp4Release(t) {
+// Audio compatibility — lower score = better for direct browser streaming.
+// Brave/Chrome/Safari play AAC and AC3/DD natively.
+// DDP (E-AC3), DTS, TrueHD, Atmos need a Dolby license Chrome doesn't have.
+function audioScore(t) {
   const n = (t.name || '').toLowerCase();
-  const f = (t.filename || '').toLowerCase();
-  return n.includes('.mp4') || n.includes(' mp4') || f.endsWith('.mp4');
+  if (n.includes('.mp4') || n.includes(' mp4')) return 0;
+  if (n.includes('aac'))                         return 0;
+  if (/\bdts\b|eac3|e-ac3|\bddp\b|dd\+|truehd|atmos/.test(n)) return 2;
+  return 1; // AC3/DD — works in Chrome/Safari on Mac
+}
+
+// Non-English language tags that appear in release names
+const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|japanese|chinese|turkish|swedish|norwegian|danish|finnish|polish|russian|romanian|hungarian|czech|slovak|ita|fre|spa|ger|por|dut|kor|jpn|chi|tur|swe|nor|dan|pol|rus|rum|hun|cze)\b/i;
+
+// Title words must appear in order with only separators between them.
+// "The Boys" → /the[.\s_\-]+boys/i — matches "The.Boys.S04E01" but NOT "The.Invisible.Boys".
+function makeTitleRe(title) {
+  const words = title.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return /.*/;
+  return new RegExp(
+    words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[.\\s_\\-]+'),
+    'i'
+  );
 }
 
 async function tlSearch(query) {
@@ -124,12 +141,12 @@ async function tlSearch(query) {
 }
 
 export async function searchTL(title, year) {
-  // Progressive query attempts: MP4 variants first (skip transcode entirely),
-  // then any format, then broaden without year/quality constraints.
   const queries = [
-    year ? `${title} ${year} 1080p mp4` : `${title} 1080p mp4`,  // MP4 → no transcode
-    year ? `${title} ${year} 1080p`     : `${title} 1080p`,       // any format
+    year ? `${title} ${year} 1080p mp4` : `${title} 1080p mp4`,
+    year ? `${title} ${year} 1080p aac` : `${title} 1080p aac`,
+    year ? `${title} ${year} 1080p`     : `${title} 1080p`,
     year ? `${title} ${year} 720p mp4`  : `${title} 720p mp4`,
+    year ? `${title} ${year} 720p aac`  : `${title} 720p aac`,
     year ? `${title} ${year} 720p`      : `${title} 720p`,
     year ? `${title} ${year}`           : null,
     title,
@@ -147,21 +164,30 @@ export async function searchTL(title, year) {
   if (!results.length) return null;
 
   const GB = 1024 * 1024 * 1024;
-  const MAX_SIZE = 4 * GB; // 4 GB hard cap — WEBRips fit, Remux/UHD excluded
+  const MAX_SIZE = 4 * GB;
 
-  const sizeOf = (t) => parseInt(t.size || 0);
+  const sizeOf      = (t) => parseInt(t.size || 0);
+  const isEnglish   = (t) => !FOREIGN_RE.test(t.name);
+  // Title words must appear in order with only separators between them
+  const titleRe    = makeTitleRe(title);
+  const titleMatch = (t) => titleRe.test(t.name);
+  const hasYear     = (t) => !year || t.name.includes(String(year));
+  const hasWrongYear = (t) => {
+    if (!year) return false;
+    const found = t.name.match(/\b(?:19|20)\d{2}\b/g) || [];
+    return found.length > 0 && !found.includes(String(year));
+  };
+  const sizeOk      = (t) => sizeOf(t) <= MAX_SIZE;
 
-  const baseFilter = (t) => {
+  const baseFilter  = (t) => {
     const n = t.name.toLowerCase();
-    // Exclude Remux and UHD/4K — these are always huge and unnecessary
     if (n.includes('remux') || n.includes('2160p') || n.includes('4k') || n.includes('uhd')) return false;
     return qualScore(t.name) >= 0 && (n.includes('1080p') || n.includes('720p'));
   };
 
   const rank = (a, b) => {
-    // MP4 wins over MKV at equal quality — no transcode needed, direct upload
-    const aMp4 = isMp4Release(a), bMp4 = isMp4Release(b);
-    if (aMp4 !== bMp4) return aMp4 ? -1 : 1;
+    const audioDiff = audioScore(a) - audioScore(b);
+    if (audioDiff !== 0) return audioDiff;
     const qDiff = qualScore(b.name) - qualScore(a.name);
     if (qDiff !== 0) return qDiff;
     const a1080 = a.name.toLowerCase().includes('1080p');
@@ -171,22 +197,27 @@ export async function searchTL(title, year) {
     return (b.seeders || 0) - (a.seeders || 0);
   };
 
-  // 1. HD under 4 GB — ideal (WEBRip MP4 typically 1.5-4 GB)
-  let valid = results.filter(t => baseFilter(t) && sizeOf(t) <= MAX_SIZE).sort(rank);
+  // 1. Title match + correct year + English + HD + under 4 GB
+  let valid = results.filter(t => titleMatch(t) && baseFilter(t) && isEnglish(t) && hasYear(t) && sizeOk(t)).sort(rank);
 
-  // 2. HD under 8 GB — relaxed cap (some releases run 5-7 GB)
+  // 2. Relax year — exclude results with a different year, keep title match
   if (!valid.length) {
-    valid = results.filter(t => baseFilter(t) && sizeOf(t) <= 8 * GB)
-                   .sort((a, b) => sizeOf(a) - sizeOf(b));
-    if (valid.length) console.log(`[tl] no results under 4 GB, using smallest HD: ${(sizeOf(valid[0])/1e9).toFixed(1)} GB`);
+    valid = results.filter(t => titleMatch(t) && baseFilter(t) && isEnglish(t) && !hasWrongYear(t) && sizeOk(t)).sort(rank);
+    if (valid.length) console.log(`[tl] relaxed year filter`);
   }
 
-  // 3. Any non-cam/non-remux — last resort for niche films with no small HD version
+  // 3. Last resort — title match, English, under 4 GB, any resolution
   if (!valid.length) {
     valid = results
-      .filter(t => qualScore(t.name) >= 0 && !t.name.toLowerCase().includes('remux'))
-      .sort((a, b) => sizeOf(a) - sizeOf(b)); // smallest first
-    if (valid.length) console.log(`[tl] no HD results, using best available: ${valid[0].name} (${(sizeOf(valid[0])/1e9).toFixed(1)} GB)`);
+      .filter(t => titleMatch(t) && qualScore(t.name) >= 0 && !t.name.toLowerCase().includes('remux') && isEnglish(t) && sizeOk(t))
+      .sort((a, b) => audioScore(a) - audioScore(b) || sizeOf(a) - sizeOf(b));
+    if (valid.length) console.log(`[tl] no HD results, best available: ${valid[0].name}`);
+  }
+
+  // 4. Absolute last resort — ignore language but keep title match
+  if (!valid.length) {
+    valid = results.filter(t => titleMatch(t) && baseFilter(t) && sizeOk(t)).sort(rank);
+    if (valid.length) console.log(`[tl] no English results, using any language`);
   }
 
   if (!valid.length) return null;
@@ -195,8 +226,7 @@ export async function searchTL(title, year) {
   const n = best.name.toLowerCase();
   const quality = n.includes('1080p') ? '1080p' : n.includes('720p') ? '720p' : 'SD';
 
-  const fmt = isMp4Release(best) ? 'MP4 ✓ (no transcode)' : 'MKV (transcode needed)';
-  console.log(`[tl] best match: ${best.name} | ${fmt} | seeds: ${best.seeders} | id: ${best.fid}`);
+  console.log(`[tl] best match: ${best.name} | audio:${audioScore(best)} | seeds: ${best.seeders} | id: ${best.fid}`);
 
   // Download the .torrent file now, while we have a valid TL session.
   // The download endpoint requires the session cookie — no cookie, just gets HTML.
@@ -226,4 +256,46 @@ async function tlFetchBinary(url) {
     throw new Error(`TL torrent download returned non-torrent data: ${buf.slice(0, 100).toString('utf8')}`);
   }
   return buf;
+}
+
+export async function searchTLEpisode(showTitle, season, episode) {
+  const s = String(season).padStart(2, '0');
+  const e = String(episode).padStart(2, '0');
+  const tag = `S${s}E${e}`;
+  const queries = [
+    `${showTitle} ${tag} 1080p`,
+    `${showTitle} ${tag}`,
+  ];
+  // TL TV categories: 26=TV Episodes, 27=TV HD, 32=TV Boxsets
+  const TV_CATS = '26,27,32';
+  let data = null;
+  for (const q of queries) {
+    try {
+      const text = await tlFetch(`/torrents/browse/list/query/${encodeURIComponent(q)}/categories/${TV_CATS}`, { headers: { Accept: 'application/json, */*' } });
+      data = JSON.parse(text);
+      if (data?.torrentList?.length) break;
+    } catch {}
+  }
+  if (!data?.torrentList?.length) return null;
+
+  const GB = 1024 ** 3;
+  const results = data.torrentList;
+
+  const titleRe  = makeTitleRe(showTitle);
+  const tagLower = tag.toLowerCase();
+
+  const valid = results
+    .filter(t => {
+      const n = t.name.toLowerCase();
+      const hasTag   = n.includes(tagLower);
+      const hasTitle = titleRe.test(t.name);
+      return hasTag && hasTitle && !n.includes('remux') && !FOREIGN_RE.test(t.name) && parseInt(t.size || 0) <= 4 * GB && audioScore(t) < 2;
+    })
+    .sort((a, b) => audioScore(a) - audioScore(b) || (b.seeders || 0) - (a.seeders || 0));
+
+  if (!valid.length) return null;
+  const best = valid[0];
+  const torrentBuf = await tlFetchBinary(`${TL_BASE}/download/${best.fid}/${TL_PK}`);
+  console.log(`[tl] TV episode: ${best.name} | seeds: ${best.seeders}`);
+  return { source: 'tl', title: best.name, quality: '1080p', seeds: best.seeders || 0, size: best.size || '?', torrentBuf };
 }

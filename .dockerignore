@@ -1,0 +1,7 @@
+node_modules
+downloads
+jobs.json
+.env
+*.log
+cf-proxy
+talk

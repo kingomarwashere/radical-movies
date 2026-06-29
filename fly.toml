@@ -1,0 +1,28 @@
+app = 'radical-movies'
+primary_region = 'ams'
+
+[build]
+
+[env]
+  PORT = '8080'
+
+[mounts]
+  source = 'radical_movies_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = '4gb'
+  cpu_kind = 'performance'
+  cpus = 2

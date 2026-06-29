@@ -10,17 +10,19 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { spawn } from 'child_process';
 
+import { authRoutes, requireAuth } from './auth.js';
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
-import { searchTPB } from './piratebay.js';
-import { searchTL } from './torrentleech.js';
+import { searchTPB, searchTPBEpisode } from './piratebay.js';
+import { searchTL, searchTLEpisode } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2, transcodeAudioAndUploadToR2,
+  pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
+  transcodeAudioAndUploadToR2, probeRemoteAudioCodec,
 } from './seedbox.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
-import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
+import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -35,7 +37,42 @@ const io = new Server(httpServer, {
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
-app.use(express.static(PUBLIC_DIR));
+
+// Cache-bust token changes on every server start — forces browsers to re-fetch JS/CSS
+const BUILD_ID = Date.now();
+
+// Serve index.html with cache-busted asset URLs injected at runtime
+app.get('/', (req, res) => {
+  let html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+  html = html.replace(/\b(app\.js|style\.css)\b/g, `$1?v=${BUILD_ID}`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
+});
+
+// Static files — no auth, no-store prevents any stale cache serving
+app.use(express.static(PUBLIC_DIR, {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res, filePath) => {
+    if (/\.(js|css)$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store');
+    } else if (/\.html$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  },
+}));
+
+// Auth routes (login/logout/me) — no auth needed
+app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
+authRoutes(app);
+
+// All API and socket routes require auth
+app.use((req, res, next) => {
+  if (req.path.startsWith('/socket.io')) return next();
+  if (req.path.startsWith('/api/')) return requireAuth(req, res, next);
+  next();
+});
 
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 
@@ -44,13 +81,13 @@ const jobs          = new Map(); // jobId → job
 const activeStreams  = new Map(); // streamId → { jobId, title, ip, startedAt, bytesSent }
 
 // ── Job persistence ─────────────────────────────────────────────────────────
-const JOBS_FILE = path.join(__dirname, '..', 'jobs.json');
+const JOBS_FILE = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'jobs.json')
+  : path.join(__dirname, '..', 'jobs.json');
 
 function saveJobs() {
   const out = {};
-  for (const [id, job] of jobs) {
-    if (job.status === 'ready' || job.status === 'error') out[id] = sanitize(job);
-  }
+  for (const [id, job] of jobs) out[id] = sanitize(job);
   try { fs.writeFileSync(JOBS_FILE, JSON.stringify(out)); } catch {}
 }
 
@@ -58,7 +95,15 @@ function saveJobs() {
   try {
     if (!fs.existsSync(JOBS_FILE)) return;
     const saved = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
-    for (const [id, job] of Object.entries(saved)) jobs.set(id, job);
+    for (const [id, job] of Object.entries(saved)) {
+      // Mark any in-progress jobs as error — they were interrupted by a restart
+      if (['searching', 'downloading', 'uploading'].includes(job.status)) {
+        job.status = 'error';
+        job.error = 'Interrupted by server restart — please re-add to library';
+        job.message = job.error;
+      }
+      jobs.set(id, job);
+    }
     console.log(`[jobs] restored ${Object.keys(saved).length} jobs from disk`);
   } catch (e) { console.error('[jobs] load failed:', e.message); }
 })();
@@ -75,10 +120,33 @@ app.get('/api/movies/genre/:id', wrap((req) => tmdb.getByGenre(req.params.id, re
 app.get('/api/movies/search', wrap((req) => tmdb.search(req.query.q, req.query.page)));
 app.get('/api/movies/:id', wrap((req) => tmdb.getMovie(req.params.id)));
 
+// ── TV TMDB routes ─────────────────────────────────────────────────────────
+app.get('/api/tv/trending', wrap(() => tmdb.getTVTrending()));
+app.get('/api/tv/popular', wrap((req) => tmdb.getTVPopular(req.query.page)));
+app.get('/api/tv/top-rated', wrap((req) => tmdb.getTVTopRated(req.query.page)));
+app.get('/api/tv/search', wrap((req) => tmdb.searchTV(req.query.q, req.query.page)));
+app.get('/api/tv/:id/season/:season', wrap((req) => tmdb.getTVSeason(req.params.id, req.params.season)));
+app.get('/api/tv/:id', wrap((req) => tmdb.getTVShow(req.params.id)));
+
+// ── Library ────────────────────────────────────────────────────────────────
+app.get('/api/library', (req, res) => {
+  const user = req.username;
+  const list = [...jobs.values()]
+    .filter(j => !j.user || j.user === user) // show user's own jobs + legacy jobs with no user
+    .map(j => ({ id: j.id, type: j.type, title: j.title, showTitle: j.showTitle, season: j.season, episode: j.episode, status: j.status, progress: j.progress, message: j.message, streamUrl: j.streamUrl, quality: j.quality, tmdbId: j.tmdbId, createdAt: j.createdAt, error: j.error }))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  res.json(list);
+});
+
 // ── Watch — start download pipeline ───────────────────────────────────────
 app.post('/api/watch', async (req, res) => {
-  const { tmdbId, title, year } = req.body;
+  const { tmdbId, title, year, type, season, episode, showTitle } = req.body;
   if (!title) return res.status(400).json({ error: 'title required' });
+
+  // Queue limit
+  const MAX_QUEUE = 10;
+  const activeCount = [...jobs.values()].filter(j => ['searching','downloading','uploading'].includes(j.status)).length;
+  if (activeCount >= MAX_QUEUE) return res.status(429).json({ error: `Queue full (${MAX_QUEUE} max). Wait for a slot.` });
 
   // Dedup: return existing job if we already have this movie
   for (const [id, job] of jobs) {
@@ -110,6 +178,8 @@ app.post('/api/watch', async (req, res) => {
   const jobId = randomUUID();
   jobs.set(jobId, {
     id: jobId, tmdbId, title, year,
+    type: type || 'movie', season, episode, showTitle,
+    user: req.username,
     status: 'searching', progress: 0,
     speed: null, eta: null, message: 'Searching for torrent…',
     streamUrl: null, localPath: null, error: null,
@@ -197,6 +267,7 @@ app.get('/api/stream/:jobId', (req, res) => {
 
 // ── Admin API ──────────────────────────────────────────────────────────────
 app.get('/api/admin/stats', async (req, res) => res.json(await buildAdminStats()));
+app.get('/api/admin/r2', async (req, res) => res.json(await listR2Objects()));
 
 app.delete('/api/admin/job/:jobId', (req, res) => {
   const id = req.params.jobId;
@@ -322,18 +393,31 @@ async function runPipeline(jobId) {
     broadcastAdmin();
   };
 
-  // 1. Search — TorrentLeech first (private, high seeds), then YTS, then TPB
-  emit({ status: 'searching', message: 'Searching TorrentLeech…' });
-  let torrent = await searchTL(job.title, job.year).catch(e => { console.error('[tl]', e.message); return null; });
+  // 1. Search — branch on type
+  let torrent = null;
 
-  if (!torrent) {
-    emit({ message: 'Not on TL — trying YTS…' });
-    torrent = await searchYTS(job.title, job.year).catch(e => { console.error('[yts]', e.message); return null; });
-  }
+  if (job.type === 'tv') {
+    emit({ status: 'searching', message: `Searching TorrentLeech for ${job.title}…` });
+    torrent = await searchTLEpisode(job.showTitle, job.season, job.episode).catch(e => { console.error('[tl]', e.message); return null; });
 
-  if (!torrent) {
-    emit({ message: 'Not on YTS — trying The Pirate Bay…' });
-    torrent = await searchTPB(job.title, job.year).catch(e => { console.error('[tpb]', e.message); return null; });
+    if (!torrent) {
+      emit({ message: 'Not on TL — trying The Pirate Bay…' });
+      torrent = await searchTPBEpisode(job.showTitle, job.season, job.episode).catch(e => { console.error('[tpb]', e.message); return null; });
+    }
+  } else {
+    // Movie: TorrentLeech first (private, high seeds), then YTS, then TPB
+    emit({ status: 'searching', message: 'Searching TorrentLeech…' });
+    torrent = await searchTL(job.title, job.year).catch(e => { console.error('[tl]', e.message); return null; });
+
+    if (!torrent) {
+      emit({ message: 'Not on TL — trying YTS…' });
+      torrent = await searchYTS(job.title, job.year).catch(e => { console.error('[yts]', e.message); return null; });
+    }
+
+    if (!torrent) {
+      emit({ message: 'Not on YTS — trying The Pirate Bay…' });
+      torrent = await searchTPB(job.title, job.year).catch(e => { console.error('[tpb]', e.message); return null; });
+    }
   }
 
   console.log(`[pipeline] search result for "${job.title}":`, torrent ? `${torrent.quality} via ${torrent.source}` : 'NOT FOUND');
@@ -369,37 +453,49 @@ async function runPipeline(jobId) {
 
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
-      const r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
-      emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
 
-      // MKV almost always has non-AAC audio — transcode to fMP4 (AAC audio, seekable).
-      // MP4 files are usually already AAC so upload directly via parallel SFTP.
-      if (remoteExt !== '.mp4') {
-        // Output is always fragmented MP4 regardless of input container
-        const r2KeyMp4 = r2Key.replace(/\.[^.]+$/, '.mp4');
-        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2KeyMp4, (pct) => {
-          emit({ status: 'uploading', progress: pct,
-                 message: pct <= 50 ? `Downloading from seedbox… ${pct * 2}%` : `Transcoding & uploading… ${(pct - 50) * 2}%` });
+      // Probe audio codec on the seedbox. If incompatible with browsers (DTS, EAC3, TrueHD, etc.)
+      // or if ffprobe is unavailable and the container is not MP4, transcode audio→AAC and remux
+      // to fragmented MP4 — required for Safari (which rejects MKV) and Brave (which can't decode DTS).
+      emit({ status: 'uploading', progress: 0, message: 'Checking audio compatibility…' });
+      const audioCodec = await probeRemoteAudioCodec(remoteVideoPath);
+      const SAFE_AUDIO = new Set(['aac', 'ac3', 'mp3', 'opus', 'vorbis']);
+      const needsAudioFix = audioCodec !== null
+        ? !SAFE_AUDIO.has(audioCodec)
+        : remoteExt !== '.mp4'; // ffprobe unavailable — assume non-MP4 needs transcode
+
+      console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown (ffprobe unavailable)'} → ${needsAudioFix ? 'transcode' : 'fast upload'}`);
+
+      if (needsAudioFix) {
+        // Audio transcode: fastGet to VM disk → ffmpeg (-c:v copy -c:a aac) → R2 as fMP4
+        const baseName = path.basename(remoteVideoPath, remoteExt);
+        const r2Key    = `movies/${jobId}/${baseName}.mp4`;
+        emit({ status: 'uploading', progress: 0, message: `Audio (${audioCodec ?? 'unknown'}) needs transcode — pulling from seedbox…` });
+        await transcodeAudioAndUploadToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, (pct) => {
+          const msg = pct <= 50
+            ? `Pulling from seedbox… ${pct * 2}%`
+            : `Transcoding audio & uploading… ${(pct - 50) * 2}%`;
+          emit({ status: 'uploading', progress: pct, message: msg });
         }, DOWNLOADS_DIR);
-        // Use the .mp4 key for the stream URL
         job.status    = 'ready';
         job.readyAt   = Date.now();
-        job.streamUrl = getStreamUrl(r2KeyMp4);
+        job.r2Key     = r2Key;
+        job.streamUrl = getStreamUrl(r2Key);
         saveJobs();
         io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
         io.to(jobId).emit('job:update', sanitize(job));
-        // deleteTorrent disabled for testing
-        // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
         return;
-      } else {
-        await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
-          emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
-        });
       }
-      // deleteTorrent disabled for testing — re-enable when done
-      // if (torrentHash) await deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+
+      // Audio already compatible → fast parallel SFTP→R2 upload (no VM disk touch)
+      const r2Key = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
+      emit({ status: 'uploading', progress: 0, message: 'Uploading to R2…' });
+      await parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, (pct) => {
+        emit({ status: 'uploading', progress: pct, message: `Uploading to R2… ${pct}%` });
+      });
       job.status    = 'ready';
-      job.readyAt   = Date.now(); // ← transcode+upload complete
+      job.readyAt   = Date.now();
+      job.r2Key     = r2Key;
       job.streamUrl = getStreamUrl(r2Key);
       saveJobs();
       io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });

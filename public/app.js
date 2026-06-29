@@ -24,52 +24,72 @@ let heroTimer = null;
 let currentJobId = null;
 let countdownInterval = null;
 let socket = null;
+let currentSection = 'home'; // 'home' | 'tv' | 'library'
+let loggedInUser = null;
+let libraryPollTimer = null;
+let libraryData = [];
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const heroBg       = $('heroBg');
-const heroTitle    = $('heroTitle');
-const heroMeta     = $('heroMeta');
-const heroDesc     = $('heroDesc');
-const heroWatch    = $('heroWatch');
-const heroInfo     = $('heroInfo');
-const searchInput  = $('searchInput');
-const searchClear  = $('searchClear');
-const searchResults = $('searchResults');
-const searchGrid   = $('searchGrid');
-const searchHeading = $('searchHeading');
-const rows         = $('rows');
-const modalWrap    = $('modalWrap');
-const modalBackdrop = $('modalBackdrop');
-const modalClose   = $('modalClose');
-const modalHero    = $('modalHero');
-const modalTitle   = $('modalTitle');
-const modalMeta    = $('modalMeta');
-const modalOverview = $('modalOverview');
-const modalRight   = $('modalRight');
-const modalActions = $('modalActions');
-const modalWatch   = $('modalWatch');
-const modalSimilar = $('modalSimilar');
-const fetchOverlay = $('fetchOverlay');
-const fetchClose   = $('fetchClose');
-const fetchTitle   = $('fetchTitle');
-const ringFill     = $('ringFill');
-const countdownTime = $('countdownTime');
-const fetchStatus  = $('fetchStatus');
-const progressWrap = $('progressWrap');
-const progressFill = $('progressFill');
-const progressInfo = $('progressInfo');
-const playerOverlay = $('playerOverlay');
-const playerClose  = $('playerClose');
-const playerTitle  = $('playerTitle');
-const videoEl      = $('videoEl');
+const heroBg         = $('heroBg');
+const heroTitle      = $('heroTitle');
+const heroMeta       = $('heroMeta');
+const heroDesc       = $('heroDesc');
+const heroWatch      = $('heroWatch');
+const heroInfo       = $('heroInfo');
+const searchInput    = $('searchInput');
+const searchClear    = $('searchClear');
+const searchResults  = $('searchResults');
+const searchGrid     = $('searchGrid');
+// searchHeading removed — search now shows Movies + TV sections separately
+const heroEl         = $('hero');
+const rows           = $('rows');
+const tvRows         = $('tvRows');
+const librarySection = $('librarySection');
+const libraryGrid    = $('libraryGrid');
+const libBadge       = $('libBadge');
+const bottomBadge    = $('bottomBadge');
+const navUsername    = $('navUsername');
+const logoutBtn      = $('logoutBtn');
+const modalWrap      = $('modalWrap');
+const modalBackdrop  = $('modalBackdrop');
+const modalClose     = $('modalClose');
+const modalHero      = $('modalHero');
+const modalTitle     = $('modalTitle');
+const modalMeta      = $('modalMeta');
+const modalOverview  = $('modalOverview');
+const modalRight     = $('modalRight');
+const modalActions   = $('modalActions');
+const modalWatch     = $('modalWatch');
+const modalSimilar   = $('modalSimilar');
+const tvModalWrap    = $('tvModalWrap');
+const tvModalBackdrop = $('tvModalBackdrop');
+const tvModalClose   = $('tvModalClose');
+const tvModalHero    = $('tvModalHero');
+const tvModalTitle   = $('tvModalTitle');
+const tvModalMeta    = $('tvModalMeta');
+const tvModalOverview = $('tvModalOverview');
+const tvModalRight   = $('tvModalRight');
+const tvSeasons      = $('tvSeasons');
+const tvModalSimilar = $('tvModalSimilar');
+const fetchOverlay   = $('fetchOverlay');
+const fetchClose     = $('fetchClose');
+const fetchTitle     = $('fetchTitle');
+const ringFill       = $('ringFill');
+const countdownTime  = $('countdownTime');
+const fetchStatus    = $('fetchStatus');
+const progressWrap   = $('progressWrap');
+const progressFill   = $('progressFill');
+const progressInfo   = $('progressInfo');
+const playerOverlay  = $('playerOverlay');
+const playerClose    = $('playerClose');
+const playerTitle    = $('playerTitle');
+const videoEl        = $('videoEl');
 
 // ── Socket setup ───────────────────────────────────────────────────────────
 function initSocket() {
-  // Polling only — WebSocket doesn't proxy through the Cloudflare Worker
   socket = io({ transports: ['polling'] });
 
-  // Re-join on reconnect so we get the latest job state if we missed events
   socket.on('connect', () => {
     if (currentJobId) socket.emit('watch:join', currentJobId);
   });
@@ -77,7 +97,6 @@ function initSocket() {
   socket.on('job:update', (job) => {
     if (job.id !== currentJobId) return;
     updateFetchUI(job);
-    // Recover if we missed the job:ready event (e.g. reconnect after upload completed)
     if (job.status === 'ready' && job.streamUrl) openPlayer(job.streamUrl, job.title);
   });
 
@@ -101,11 +120,31 @@ async function api(path) {
   return res.json();
 }
 
+// ── Auth ───────────────────────────────────────────────────────────────────
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.status === 401) { location.href = '/login'; return; }
+    const data = await res.json();
+    loggedInUser = data.username;
+    navUsername.textContent = loggedInUser;
+  } catch {
+    location.href = '/login';
+  }
+}
+
+logoutBtn.addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  location.href = '/login';
+});
+
 // ── Boot ───────────────────────────────────────────────────────────────────
 async function init() {
+  await checkAuth();
   initSocket();
   setupNav();
   setupSearch();
+  startLibraryPolling();
   loadAll();
 }
 
@@ -129,14 +168,28 @@ async function loadAll() {
   renderHero(heroMovies[0]);
   startHeroRotation();
 
-  renderRow('rowTrending', trendingMovies);
-  renderRow('rowPopular', get(popular));
-  renderRow('rowTopRated', get(topRated));
-  renderRow('rowNowPlaying', get(nowPlaying));
-  renderRow('rowAction', get(action));
-  renderRow('rowScifi', get(scifi));
-  renderRow('rowDrama', get(drama));
-  renderRow('rowComedy', get(comedy));
+  renderRow('rowTrending',   trendingMovies,  'movie');
+  renderRow('rowPopular',    get(popular),    'movie');
+  renderRow('rowTopRated',   get(topRated),   'movie');
+  renderRow('rowNowPlaying', get(nowPlaying), 'movie');
+  renderRow('rowAction',     get(action),     'movie');
+  renderRow('rowScifi',      get(scifi),      'movie');
+  renderRow('rowDrama',      get(drama),      'movie');
+  renderRow('rowComedy',     get(comedy),     'movie');
+}
+
+async function loadTVRows() {
+  if (tvRows.dataset.loaded) return;
+  const [trending, popular, topRated] = await Promise.allSettled([
+    tmdb('/trending/tv/week'),
+    tmdb('/tv/popular'),
+    tmdb('/tv/top_rated'),
+  ]);
+  const get = (r) => r.status === 'fulfilled' ? r.value.results ?? [] : [];
+  renderRow('rowTVTrending', get(trending), 'tv');
+  renderRow('rowTVPopular',  get(popular),  'tv');
+  renderRow('rowTVTopRated', get(topRated), 'tv');
+  tvRows.dataset.loaded = '1';
 }
 
 // ── Hero ───────────────────────────────────────────────────────────────────
@@ -146,12 +199,12 @@ function renderHero(m) {
   heroTitle.textContent = m.title || m.name || '';
   heroMeta.innerHTML = [
     m.release_date ? `<span>${m.release_date.slice(0, 4)}</span>` : '',
-    m.vote_average ? `<span>⭐ ${m.vote_average.toFixed(1)}</span>` : '',
+    m.vote_average ? `<span>&#9733; ${m.vote_average.toFixed(1)}</span>` : '',
     m.original_language ? `<span>${m.original_language.toUpperCase()}</span>` : '',
   ].filter(Boolean).join('');
   heroDesc.textContent = m.overview || '';
   heroWatch.onclick = () => startWatch(m);
-  heroInfo.onclick = () => openModal(m.id);
+  heroInfo.onclick  = () => openModal(m.id);
 }
 
 function startHeroRotation() {
@@ -163,34 +216,58 @@ function startHeroRotation() {
 }
 
 // ── Row rendering ──────────────────────────────────────────────────────────
-function renderRow(trackId, movies) {
+function renderRow(trackId, movies, type = 'movie') {
   const track = $(trackId);
   if (!track) return;
   track.innerHTML = '';
-
   for (const m of movies.slice(0, 20)) {
-    track.appendChild(createCard(m));
+    track.appendChild(createCard(m, type));
   }
 }
 
-function createCard(m) {
+function createCard(m, type = 'movie') {
   const card = document.createElement('div');
   card.className = 'card';
+  card.dataset.tmdbId = m.id;
+  card.dataset.mediaType = type;
+  const displayTitle = m.title || m.name || '';
+  const year = m.release_date?.slice(0, 4) || m.first_air_date?.slice(0, 4) || '';
   card.innerHTML = `
-    <img class="card-img" src="${POSTER(m.poster_path)}" alt="${escHtml(m.title || '')}" loading="lazy">
+    <img class="card-img" src="${POSTER(m.poster_path)}" alt="${escHtml(displayTitle)}" loading="lazy">
     <div class="card-info">
-      <div class="card-title">${escHtml(m.title || m.name || '')}</div>
+      <div class="card-title">${escHtml(displayTitle)}</div>
       <div class="card-meta">
-        ${m.release_date ? `<span>${m.release_date.slice(0,4)}</span>` : ''}
-        ${m.vote_average ? `<span class="card-rating">★ ${m.vote_average.toFixed(1)}</span>` : ''}
+        ${year ? `<span>${year}</span>` : ''}
+        ${m.vote_average ? `<span class="card-rating">&#9733; ${m.vote_average.toFixed(1)}</span>` : ''}
       </div>
     </div>
   `;
-  card.addEventListener('click', () => openModal(m.id));
+  card.addEventListener('click', () => {
+    if (type === 'tv') openTVModal(m.id);
+    else openModal(m.id);
+  });
   return card;
 }
 
-// ── Modal ──────────────────────────────────────────────────────────────────
+function updateCardBadges() {
+  document.querySelectorAll('.card[data-tmdb-id]').forEach(card => {
+    const id = parseInt(card.dataset.tmdbId);
+    const job = libraryData.find(j => j.tmdbId === id && j.status !== 'error');
+    let badge = card.querySelector('.card-lib-tag');
+    if (!job) { badge?.remove(); return; }
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'card-lib-tag';
+      card.appendChild(badge);
+    }
+    if (job.status === 'ready') { badge.textContent = '▶ Ready'; badge.dataset.state = 'ready'; }
+    else if (job.status === 'downloading') { badge.textContent = `↓ ${job.progress ?? 0}%`; badge.dataset.state = 'active'; }
+    else if (job.status === 'uploading') { badge.textContent = `↑ ${job.progress ?? 0}%`; badge.dataset.state = 'active'; }
+    else { badge.textContent = '⏳'; badge.dataset.state = 'active'; }
+  });
+}
+
+// ── Movie Modal ────────────────────────────────────────────────────────────
 let currentMovie = null;
 
 async function openModal(tmdbId) {
@@ -204,13 +281,13 @@ async function openModal(tmdbId) {
 
     modalTitle.textContent = m.title || '';
 
-    const year = m.release_date?.slice(0, 4) ?? '';
+    const year    = m.release_date?.slice(0, 4) ?? '';
     const runtime = m.runtime ? `${Math.floor(m.runtime / 60)}h ${m.runtime % 60}m` : '';
-    const genres = (m.genres ?? []).map(g => `<span class="meta-tag">${g.name}</span>`).join('');
-    const rating = m.vote_average ? `<span class="meta-tag meta-rating">★ ${m.vote_average.toFixed(1)}</span>` : '';
+    const genres  = (m.genres ?? []).map(g => `<span class="meta-tag">${g.name}</span>`).join('');
+    const rating  = m.vote_average ? `<span class="meta-tag meta-rating">&#9733; ${m.vote_average.toFixed(1)}</span>` : '';
 
     modalMeta.innerHTML = [
-      year ? `<span>${year}</span>` : '',
+      year    ? `<span>${year}</span>`    : '',
       runtime ? `<span>${runtime}</span>` : '',
       rating,
       '<span class="meta-tag meta-quality">720p / 1080p</span>',
@@ -220,29 +297,40 @@ async function openModal(tmdbId) {
     modalOverview.textContent = m.overview || '';
 
     const director = m.credits?.crew?.find(c => c.job === 'Director');
-    const cast = (m.credits?.crew ? m.credits.crew.slice(0,5) : []);
-    const topCast = (m.credits?.cast ?? []).slice(0, 5).map(a => a.name).join(', ');
+    const topCast  = (m.credits?.cast ?? []).slice(0, 5).map(a => a.name).join(', ');
 
     modalRight.innerHTML = [
       director ? `<div><strong>Director:</strong> ${escHtml(director.name)}</div>` : '',
-      topCast ? `<div><strong>Cast:</strong> ${escHtml(topCast)}</div>` : '',
+      topCast  ? `<div><strong>Cast:</strong> ${escHtml(topCast)}</div>`           : '',
       m.original_language ? `<div><strong>Language:</strong> ${m.original_language.toUpperCase()}</div>` : '',
-      m.status ? `<div><strong>Status:</strong> ${escHtml(m.status)}</div>` : '',
+      m.status ? `<div><strong>Status:</strong> ${escHtml(m.status)}</div>`        : '',
     ].filter(Boolean).join('');
 
-    // Similar movies
     const similar = (m.similar?.results ?? []).slice(0, 12);
     if (similar.length) {
       const simRow = document.createElement('div');
       simRow.className = 'similar-row';
-      similar.forEach(s => simRow.appendChild(createCard(s)));
+      similar.forEach(s => simRow.appendChild(createCard(s, 'movie')));
       modalSimilar.innerHTML = '<h3>More Like This</h3>';
       modalSimilar.appendChild(simRow);
     } else {
       modalSimilar.innerHTML = '';
     }
 
-    modalWatch.onclick = () => startWatch(m);
+    // Show correct button state based on library
+    const inLibrary = libraryData.find(j => j.tmdbId === m.id && j.status !== 'error');
+    if (inLibrary?.status === 'ready') {
+      modalWatch.textContent = '▶  Play';
+      modalWatch.disabled = false;
+      modalWatch.onclick = () => { closeModal(); openPlayer(inLibrary.streamUrl, m.title); };
+    } else if (inLibrary) {
+      modalWatch.textContent = '✓ In Library';
+      modalWatch.disabled = true;
+    } else {
+      modalWatch.textContent = '+ Add to Library';
+      modalWatch.disabled = false;
+      modalWatch.onclick = () => queueWatch(m);
+    }
     modalWrap.hidden = false;
     document.body.style.overflow = 'hidden';
   } catch (e) {
@@ -259,43 +347,255 @@ function closeModal() {
 modalClose.addEventListener('click', closeModal);
 modalBackdrop.addEventListener('click', closeModal);
 
-// ── Watch / Download ───────────────────────────────────────────────────────
+// ── TV Show Modal ──────────────────────────────────────────────────────────
+let currentShow = null;
+let currentTVSeason = 1;
+
+async function openTVModal(showId) {
+  try {
+    const show = await tmdb(`/tv/${showId}`, { append_to_response: 'credits,videos,similar' });
+    currentShow = show;
+    currentTVSeason = 1;
+
+    tvModalHero.style.backgroundImage = BACKDROP(show.backdrop_path)
+      ? `url(${BACKDROP(show.backdrop_path)})`
+      : '';
+
+    tvModalTitle.textContent = show.name || '';
+
+    const year    = show.first_air_date?.slice(0, 4) ?? '';
+    const seasons = show.number_of_seasons ? `${show.number_of_seasons} Season${show.number_of_seasons > 1 ? 's' : ''}` : '';
+    const genres  = (show.genres ?? []).map(g => `<span class="meta-tag">${g.name}</span>`).join('');
+    const rating  = show.vote_average ? `<span class="meta-tag meta-rating">&#9733; ${show.vote_average.toFixed(1)}</span>` : '';
+
+    tvModalMeta.innerHTML = [
+      year    ? `<span>${year}</span>`    : '',
+      seasons ? `<span>${seasons}</span>` : '',
+      rating,
+      genres,
+    ].filter(Boolean).join('');
+
+    tvModalOverview.textContent = show.overview || '';
+
+    const creator = show.created_by?.[0];
+    const topCast = (show.credits?.cast ?? []).slice(0, 5).map(a => a.name).join(', ');
+    tvModalRight.innerHTML = [
+      creator  ? `<div><strong>Creator:</strong> ${escHtml(creator.name)}</div>` : '',
+      topCast  ? `<div><strong>Cast:</strong> ${escHtml(topCast)}</div>`         : '',
+      show.status   ? `<div><strong>Status:</strong> ${escHtml(show.status)}</div>` : '',
+      show.networks?.length ? `<div><strong>Network:</strong> ${escHtml(show.networks[0].name)}</div>` : '',
+    ].filter(Boolean).join('');
+
+    // Similar shows
+    const similar = (show.similar?.results ?? []).slice(0, 12);
+    if (similar.length) {
+      const simRow = document.createElement('div');
+      simRow.className = 'similar-row';
+      similar.forEach(s => simRow.appendChild(createCard(s, 'tv')));
+      tvModalSimilar.innerHTML = '<h3>More Like This</h3>';
+      tvModalSimilar.appendChild(simRow);
+    } else {
+      tvModalSimilar.innerHTML = '';
+    }
+
+    await renderSeasonTabs(show);
+
+    tvModalWrap.hidden = false;
+    document.body.style.overflow = 'hidden';
+  } catch (e) {
+    toast('Failed to load show details');
+    console.error(e);
+  }
+}
+
+async function renderSeasonTabs(show) {
+  const regularSeasons = (show.seasons || []).filter(s => s.season_number > 0);
+  if (!regularSeasons.length) { tvSeasons.innerHTML = ''; return; }
+
+  let html = '<div class="season-tabs">';
+  for (const s of regularSeasons) {
+    html += `<button class="season-tab${s.season_number === currentTVSeason ? ' active' : ''}" data-season="${s.season_number}">Season ${s.season_number}</button>`;
+  }
+  html += '</div><div class="episode-list" id="episodeList"><div style="color:#777;padding:20px 0">Loading episodes…</div></div>';
+  tvSeasons.innerHTML = html;
+
+  tvSeasons.querySelectorAll('.season-tab').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      currentTVSeason = parseInt(btn.dataset.season);
+      tvSeasons.querySelectorAll('.season-tab').forEach(b => b.classList.toggle('active', b === btn));
+      await loadEpisodes(show.id, show.name, show.first_air_date?.slice(0, 4), currentTVSeason);
+    });
+  });
+
+  await loadEpisodes(show.id, show.name, show.first_air_date?.slice(0, 4), currentTVSeason);
+}
+
+async function loadEpisodes(showId, showTitle, showYear, season) {
+  const list = $('episodeList');
+  if (!list) return;
+  list.innerHTML = '<div style="color:#777;padding:20px 0">Loading…</div>';
+  try {
+    const data = await tmdb(`/tv/${showId}/season/${season}`);
+    const episodes = data.episodes || [];
+    if (!episodes.length) {
+      list.innerHTML = '<div style="color:#777;padding:20px 0">No episodes found.</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    for (const ep of episodes) {
+      const epEl = document.createElement('div');
+      epEl.className = 'episode-item';
+      epEl.innerHTML = `
+        <div class="episode-num">E${String(ep.episode_number).padStart(2, '0')}</div>
+        <div class="episode-info">
+          <div class="episode-title">${escHtml(ep.name || '')}</div>
+          <div class="episode-meta">${ep.air_date ? ep.air_date.slice(0, 4) : ''}${ep.runtime ? ' &middot; ' + ep.runtime + 'm' : ''}</div>
+          ${ep.overview ? `<div class="episode-overview">${escHtml(ep.overview)}</div>` : ''}
+        </div>
+        <button class="episode-add-btn" title="Add to library">+</button>
+      `;
+      epEl.querySelector('.episode-add-btn').addEventListener('click', (e) => {
+        const btn = e.currentTarget;
+        // Check if already in library
+        const s0 = String(season).padStart(2,'0');
+        const e0 = String(ep.episode_number).padStart(2,'0');
+        const alreadyIn = libraryData.find(j => j.tmdbId === showId && j.season == season && j.episode == ep.episode_number && j.status !== 'error');
+        if (alreadyIn) {
+          if (alreadyIn.status === 'ready' && alreadyIn.streamUrl) { openPlayer(alreadyIn.streamUrl, `${showTitle} S${s0}E${e0}`); }
+          return;
+        }
+        queueEpisode(showTitle, showYear, showId, season, ep.episode_number, ep.name, btn);
+      });
+      list.appendChild(epEl);
+    }
+  } catch (e) {
+    list.innerHTML = '<div style="color:#777;padding:20px 0">Failed to load episodes.</div>';
+  }
+}
+
+function closeTVModal() {
+  tvModalWrap.hidden = true;
+  document.body.style.overflow = '';
+  currentShow = null;
+}
+
+tvModalClose.addEventListener('click', closeTVModal);
+tvModalBackdrop.addEventListener('click', closeTVModal);
+
+// ── Watch / Queue ──────────────────────────────────────────────────────────
+// Hero "Watch Now" — shows the blocking overlay and plays immediately if ready
 async function startWatch(movie) {
   closeModal();
-
   const title = movie.title || movie.name || '';
-  const year = movie.release_date?.slice(0, 4) ?? '';
+  const year  = movie.release_date?.slice(0, 4) ?? '';
 
   fetchTitle.textContent = title;
   fetchOverlay.hidden = false;
   document.body.style.overflow = 'hidden';
-
   setFetchStatus('Initialising…');
   progressWrap.hidden = true;
   progressFill.style.width = '0%';
   startCountdown(360);
 
   try {
-    const { jobId, streamUrl, ready } = await fetch('/api/watch', {
-      method: 'POST',
+    const res = await fetch('/api/watch', {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tmdbId: movie.id, title, year }),
-    }).then(r => r.json());
-
+      body:    JSON.stringify({ tmdbId: movie.id, title, year, type: 'movie' }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(data.error || 'Failed to queue');
+      stopCountdown(); fetchOverlay.hidden = true;
+      document.body.style.overflow = '';
+      return;
+    }
+    const { jobId, streamUrl, ready } = data;
     currentJobId = jobId;
+    if (ready && streamUrl) { openPlayer(streamUrl, title); return; }
+    socket.emit('watch:join', jobId);
+  } catch {
+    stopCountdown(); fetchOverlay.hidden = true;
+    document.body.style.overflow = '';
+    toast('Failed to start download');
+  }
+}
 
+// Modal "Add to Library" — non-blocking, shows toast
+async function queueWatch(movie) {
+  const title = movie.title || movie.name || '';
+  const year  = movie.release_date?.slice(0, 4) ?? '';
+
+  // Optimistically update button immediately
+  modalWatch.textContent = '⏳ Queuing…';
+  modalWatch.disabled = true;
+
+  try {
+    const res = await fetch('/api/watch', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ tmdbId: movie.id, title, year, type: 'movie' }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      modalWatch.textContent = '+ Add to Library';
+      modalWatch.disabled = false;
+      toast(data.error || 'Failed to queue');
+      return;
+    }
+
+    const { jobId, streamUrl, ready } = data;
     if (ready && streamUrl) {
-      // Already in R2 — open immediately, no download needed
+      closeModal();
       openPlayer(streamUrl, title);
       return;
     }
 
+    currentJobId = jobId;
     socket.emit('watch:join', jobId);
-  } catch (e) {
-    stopCountdown();
-    fetchOverlay.hidden = true;
-    document.body.style.overflow = '';
-    toast('Failed to start download');
+    modalWatch.textContent = '✓ In Library';
+    modalWatch.disabled = true;
+    toast(`Added "${title}" to library`);
+    fetchLibrary();
+  } catch {
+    modalWatch.textContent = '+ Add to Library';
+    modalWatch.disabled = false;
+    toast('Failed to queue download');
+  }
+}
+
+async function queueEpisode(showTitle, showYear, showId, season, episode, epTitle, btn) {
+  const s = String(season).padStart(2, '0');
+  const e = String(episode).padStart(2, '0');
+  const jobTitle = `${showTitle} S${s}E${e}${epTitle ? ' — ' + epTitle : ''}`;
+
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+
+  try {
+    const res = await fetch('/api/watch', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ type: 'tv', title: jobTitle, showTitle, year: showYear, tmdbId: showId, season, episode }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (btn) { btn.textContent = '+'; btn.disabled = false; }
+      toast(data.error || 'Failed to queue');
+      return;
+    }
+
+    const { jobId, streamUrl, ready } = data;
+    if (ready && streamUrl) { openPlayer(streamUrl, jobTitle); return; }
+
+    currentJobId = jobId;
+    socket.emit('watch:join', jobId);
+    if (btn) { btn.textContent = '✓'; btn.title = 'In library'; }
+    toast(`Queued: ${jobTitle}`);
+    fetchLibrary();
+  } catch {
+    if (btn) { btn.textContent = '+'; btn.disabled = false; }
+    toast('Failed to queue episode');
   }
 }
 
@@ -307,7 +607,7 @@ fetchClose.addEventListener('click', () => {
 });
 
 // ── Countdown ──────────────────────────────────────────────────────────────
-const CIRCUMFERENCE = 2 * Math.PI * 54; // ~339.3
+const CIRCUMFERENCE = 2 * Math.PI * 54;
 
 function startCountdown(seconds) {
   stopCountdown();
@@ -335,29 +635,23 @@ function updateCountdownDisplay(remaining, total) {
   const mins = Math.floor(remaining / 60);
   const secs = remaining % 60;
   countdownTime.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
-
-  // Stroke offset: 0 = full ring, CIRCUMFERENCE = empty
   const pct = remaining / total;
   ringFill.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - pct));
 }
 
-function setFetchStatus(msg) {
-  fetchStatus.textContent = msg;
-}
+function setFetchStatus(msg) { fetchStatus.textContent = msg; }
 
 function updateFetchUI(job) {
   setFetchStatus(job.message || job.status);
-
   if (job.status === 'downloading' && job.progress > 0) {
     progressWrap.hidden = false;
     progressFill.style.width = `${job.progress}%`;
-
-    const dlMB = job.downloaded ? (job.downloaded / 1e6).toFixed(0) : 0;
+    const dlMB  = job.downloaded ? (job.downloaded / 1e6).toFixed(0) : 0;
     const totMB = job.total ? (job.total / 1e6).toFixed(0) : 0;
     const etaStr = job.eta ? fmtEta(job.eta) : '';
     progressInfo.innerHTML = `
-      <span>${job.progress}% · ${job.speed ?? ''}</span>
-      <span>${dlMB} / ${totMB} MB ${etaStr ? '· ' + etaStr : ''}</span>
+      <span>${job.progress}% &middot; ${job.speed ?? ''}</span>
+      <span>${dlMB} / ${totMB} MB ${etaStr ? '&middot; ' + etaStr : ''}</span>
     `;
   }
 }
@@ -374,7 +668,6 @@ function openPlayer(streamUrl, title) {
   stopCountdown();
   fetchOverlay.hidden = true;
   document.body.style.overflow = 'hidden';
-
   playerTitle.textContent = title || '';
   videoEl.src = streamUrl;
   playerOverlay.hidden = false;
@@ -389,6 +682,128 @@ playerClose.addEventListener('click', () => {
   currentJobId = null;
 });
 
+// ── Library polling ────────────────────────────────────────────────────────
+function startLibraryPolling() {
+  fetchLibrary();
+  libraryPollTimer = setInterval(fetchLibrary, 5000);
+}
+
+async function fetchLibrary() {
+  try {
+    libraryData = await fetch('/api/library').then(r => r.json());
+    updateLibraryBadge();
+    updateCardBadges();
+    if (currentSection === 'library') renderLibraryGrid();
+  } catch {}
+}
+
+function updateLibraryBadge() {
+  const inProgress = libraryData.filter(j => ['searching','downloading','uploading'].includes(j.status)).length;
+  if (inProgress > 0) {
+    libBadge.textContent = inProgress;
+    libBadge.hidden = false;
+    if (bottomBadge) { bottomBadge.textContent = inProgress; bottomBadge.hidden = false; }
+  } else {
+    libBadge.hidden = true;
+    if (bottomBadge) bottomBadge.hidden = true;
+  }
+}
+
+function statusPillHtml(status, progress) {
+  const map = {
+    searching:   ['gray',   'Searching'],
+    downloading: ['yellow', `Downloading${progress ? ' ' + progress + '%' : ''}`],
+    uploading:   ['blue',   `Uploading${progress ? ' ' + progress + '%' : ''}`],
+    processing:  ['blue',   'Processing'],
+    ready:       ['green',  'Ready'],
+    error:       ['red',    'Error'],
+  };
+  const [color, label] = map[status] || ['gray', status];
+  return `<span class="status-pill status-${color}">${label}</span>`;
+}
+
+function renderLibraryGrid() {
+  if (!libraryData.length) {
+    libraryGrid.innerHTML = '<p style="color:#777;padding:20px 0">Your library is empty. Add movies or TV episodes to get started.</p>';
+    return;
+  }
+
+  libraryGrid.innerHTML = '';
+  for (const job of libraryData) {
+    const card = document.createElement('div');
+    card.className = 'lib-card';
+
+    const progressBar = ['downloading','uploading'].includes(job.status) && job.progress
+      ? `<div class="lib-progress-wrap"><div class="lib-progress" style="width:${job.progress}%"></div></div>`
+      : '';
+
+    const r2Missing = job.status === 'ready' && !job.streamUrl;
+    const playBtn = job.status === 'ready' && job.streamUrl
+      ? `<button class="lib-play-btn" data-url="${escHtml(job.streamUrl)}" data-title="${escHtml(job.title || '')}">&#9654; Play</button>`
+      : '';
+
+    const episodeInfo = job.type === 'tv' && job.season && job.episode
+      ? `<div class="lib-episode">S${String(job.season).padStart(2,'0')}E${String(job.episode).padStart(2,'0')}</div>`
+      : '';
+
+    const displayTitle = job.showTitle || job.title || '';
+    const subTitle     = job.showTitle ? job.title : '';
+
+    card.innerHTML = `
+      <div class="lib-card-inner">
+        <img class="lib-poster" src="/no-poster.svg" alt="" loading="lazy">
+        <div class="lib-card-body">
+          <div class="lib-title">${escHtml(displayTitle)}</div>
+          ${episodeInfo}
+          ${subTitle && subTitle !== displayTitle ? `<div class="lib-subtitle">${escHtml(subTitle)}</div>` : ''}
+          ${statusPillHtml(job.status, job.progress)}
+          ${progressBar}
+          ${job.status !== 'ready' && job.status !== 'error' && job.message ? `<div class="lib-msg">${escHtml(job.message)}</div>` : ''}
+          ${job.error ? `<div class="lib-error">${escHtml(job.error)}</div>` : ''}
+        </div>
+        <div class="lib-card-actions">
+          ${playBtn}
+          <button class="lib-del-btn" data-id="${job.id}" title="Remove">&#10005;</button>
+        </div>
+      </div>
+    `;
+
+    if (job.tmdbId) {
+      loadPosterForCard(card.querySelector('.lib-poster'), job.tmdbId, job.type || 'movie');
+    }
+
+    card.querySelector('.lib-play-btn')?.addEventListener('click', (e) => {
+      openPlayer(e.currentTarget.dataset.url, e.currentTarget.dataset.title);
+    });
+
+    card.querySelector('.lib-del-btn').addEventListener('click', async (e) => {
+      const id = e.currentTarget.dataset.id;
+      await fetch(`/api/admin/job/${id}`, { method: 'DELETE' });
+      libraryData = libraryData.filter(j => j.id !== id);
+      updateLibraryBadge();
+      renderLibraryGrid();
+    });
+
+    libraryGrid.appendChild(card);
+  }
+}
+
+// Poster cache: tmdbId → poster_path
+const posterCache = new Map();
+
+async function loadPosterForCard(imgEl, tmdbId, type) {
+  const cached = posterCache.get(String(tmdbId));
+  if (cached) { imgEl.src = `${IMG}/w185${cached}`; return; }
+  try {
+    const path = type === 'tv' ? `/tv/${tmdbId}` : `/movie/${tmdbId}`;
+    const data = await tmdb(path);
+    if (data.poster_path) {
+      posterCache.set(String(tmdbId), data.poster_path);
+      imgEl.src = `${IMG}/w185${data.poster_path}`;
+    }
+  } catch {}
+}
+
 // ── Search ─────────────────────────────────────────────────────────────────
 function setupSearch() {
   let debounce;
@@ -396,72 +811,122 @@ function setupSearch() {
     const q = searchInput.value.trim();
     searchClear.hidden = !q;
     clearTimeout(debounce);
-    if (!q) { showRows(); return; }
+    if (!q) { showCurrentRows(); return; }
     debounce = setTimeout(() => doSearch(q), 400);
   });
 
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     searchClear.hidden = true;
-    showRows();
+    showCurrentRows();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!playerOverlay.hidden) {
-        videoEl.pause();
-        videoEl.src = '';
-        playerOverlay.hidden = true;
-        document.body.style.overflow = '';
-        return;
+        videoEl.pause(); videoEl.src = '';
+        playerOverlay.hidden = true; document.body.style.overflow = ''; return;
       }
       if (!fetchOverlay.hidden) {
-        stopCountdown();
-        fetchOverlay.hidden = true;
-        document.body.style.overflow = '';
-        return;
+        stopCountdown(); fetchOverlay.hidden = true;
+        document.body.style.overflow = ''; return;
       }
-      if (!modalWrap.hidden) { closeModal(); return; }
+      if (!tvModalWrap.hidden) { closeTVModal(); return; }
+      if (!modalWrap.hidden)   { closeModal();   return; }
     }
   });
 }
 
 async function doSearch(q) {
-  searchHeading.textContent = `Results for "${q}"`;
   searchResults.hidden = false;
-  rows.hidden = true;
-  searchGrid.innerHTML = '';
+  heroEl.hidden = true;
+  rows.hidden = true; tvRows.hidden = true; librarySection.hidden = true;
+  searchGrid.innerHTML = '<p style="color:#555;padding:8px 0">Searching…</p>';
+  const tvGrid = $('searchTVGrid');
+  tvGrid.innerHTML = '';
 
-  try {
-    const data = await tmdb('/search/movie', { query: q });
-    const movies = data.results ?? [];
-    if (!movies.length) {
-      searchGrid.innerHTML = '<p style="color:#777;padding:20px 0">No results found.</p>';
-      return;
-    }
-    for (const m of movies.slice(0, 30)) searchGrid.appendChild(createCard(m));
-  } catch {
-    searchGrid.innerHTML = '<p style="color:#777;padding:20px 0">Search failed.</p>';
+  const [moviesRes, tvRes] = await Promise.allSettled([
+    tmdb('/search/movie', { query: q }),
+    tmdb('/search/tv', { query: q }),
+  ]);
+
+  // Movies section
+  const movies = moviesRes.status === 'fulfilled' ? (moviesRes.value.results ?? []) : [];
+  searchGrid.innerHTML = '';
+  if (movies.length) {
+    for (const m of movies.slice(0, 20)) searchGrid.appendChild(createCard(m, 'movie'));
+  } else {
+    searchGrid.innerHTML = '<p style="color:#555;padding:8px 0">No movies found.</p>';
+  }
+
+  // TV section
+  const shows = tvRes.status === 'fulfilled' ? (tvRes.value.results ?? []) : [];
+  if (shows.length) {
+    for (const s of shows.slice(0, 20)) tvGrid.appendChild(createCard(s, 'tv'));
+  } else {
+    tvGrid.innerHTML = '<p style="color:#555;padding:8px 0">No TV shows found.</p>';
   }
 }
 
-function showRows() {
-  searchResults.hidden = true;
-  rows.hidden = false;
+function showCurrentRows() {
+  searchResults.hidden  = true;
+  heroEl.hidden         = currentSection !== 'home';
+  rows.hidden           = currentSection !== 'home';
+  tvRows.hidden         = currentSection !== 'tv';
+  librarySection.hidden = currentSection !== 'library';
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
+function syncBottomTabs(section) {
+  document.querySelectorAll('.bottom-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.section === section);
+  });
+}
+
 function setupNav() {
   window.addEventListener('scroll', () => {
     document.querySelector('.nav').classList.toggle('scrolled', window.scrollY > 20);
   });
 
-  document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', () => {
-      document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-      link.classList.add('active');
+  // Bottom tab bar (mobile)
+  document.querySelectorAll('.bottom-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const section = tab.dataset.section;
+      if (section) switchSection(section);
     });
   });
+
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+      const section = link.dataset.section;
+      if (!section) return;
+      switchSection(section);
+    });
+  });
+}
+
+function switchSection(section) {
+  currentSection = section;
+  document.querySelectorAll('.nav-link').forEach(l => {
+    l.classList.toggle('active', l.dataset.section === section);
+  });
+  syncBottomTabs(section);
+  searchInput.value = '';
+  searchClear.hidden = true;
+  searchResults.hidden = true;
+
+  heroEl.hidden         = section !== 'home';
+  rows.hidden           = section !== 'home';
+  tvRows.hidden         = section !== 'tv';
+  librarySection.hidden = section !== 'library';
+  window.scrollTo(0, 0);
+
+  searchInput.placeholder = 'Search movies & TV shows…';
+  if (section === 'tv') {
+    loadTVRows();
+  } else if (section === 'library') {
+    fetchLibrary();
+  }
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────────
@@ -475,7 +940,7 @@ function toast(msg, ms = 4000) {
 
 // ── Util ───────────────────────────────────────────────────────────────────
 function escHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ── Go ─────────────────────────────────────────────────────────────────────

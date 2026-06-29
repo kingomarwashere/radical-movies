@@ -191,3 +191,16 @@ export async function deleteFromR2(key) {
     headers: { 'Authorization': `Bearer ${CF_TOKEN}` },
   });
 }
+
+export async function listR2Objects() {
+  if (!r2Configured) return [];
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects?limit=1000`,
+      { headers: { 'Authorization': `Bearer ${CF_TOKEN}` } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.result || []).map(o => ({ key: o.key, size: o.size, lastModified: o.last_modified }));
+  } catch { return []; }
+}

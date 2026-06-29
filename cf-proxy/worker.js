@@ -1,26 +1,16 @@
-// Fetch via a non-CF hostname to avoid Cloudflare error 1003 on direct-IP access
-const ORIGIN = 'http://adrian-bingo.bnr.la';
+const ORIGIN = 'https://radical-movies.fly.dev';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const target = ORIGIN + url.pathname + url.search;
 
-    const fwdHeaders = new Headers();
-    fwdHeaders.set('host', '66.226.145.153');
+    // Add a per-request timestamp to the origin URL so CF never serves a cached subrequest
+    const sep = url.search ? '&' : '?';
+    const target = ORIGIN + url.pathname + url.search + sep + '_t=' + Date.now();
 
-    const pass = ['accept','accept-encoding','accept-language','user-agent',
-                  'content-type','range','cookie'];
-    for (const h of pass) {
-      const v = request.headers.get(h);
-      if (v) fwdHeaders.set(h, v);
-    }
-
-    const upgrade = request.headers.get('upgrade');
-    if (upgrade) {
-      fwdHeaders.set('upgrade', upgrade);
-      fwdHeaders.set('connection', request.headers.get('connection') || 'upgrade');
-    }
+    const fwdHeaders = new Headers(request.headers);
+    fwdHeaders.set('host', 'radical-movies.fly.dev');
+    fwdHeaders.set('x-forwarded-for', request.headers.get('cf-connecting-ip') || '');
 
     try {
       const resp = await fetch(target, {
@@ -28,11 +18,17 @@ export default {
         headers: fwdHeaders,
         body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
         redirect: 'manual',
+        cf: { cacheEverything: false, cacheTtl: 0 },
       });
+
+      const resHeaders = new Headers(resp.headers);
+      resHeaders.set('Cache-Control', 'no-store');
+      resHeaders.set('Cloudflare-CDN-Cache-Control', 'no-store');
+
       return new Response(resp.body, {
         status: resp.status,
         statusText: resp.statusText,
-        headers: resp.headers,
+        headers: resHeaders,
       });
     } catch (err) {
       return new Response(`Proxy error: ${err.message}`, { status: 502 });

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Radical — Sign In</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0a; color: #fff; font-family: 'Roboto Mono', monospace; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .box { width: 100%; max-width: 380px; padding: 0 20px; }
+    .logo { font-size: 2rem; font-weight: 700; letter-spacing: .1em; text-align: center; margin-bottom: 40px; color: #ff0099; }
+    .tabs { display: flex; border-bottom: 1px solid #222; margin-bottom: 28px; }
+    .tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; color: #666; font-size: .9rem; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .2s; }
+    .tab.active { color: #fff; border-color: #ff0099; }
+    .field { margin-bottom: 16px; }
+    .field input { width: 100%; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-family: inherit; font-size: .95rem; padding: 12px 14px; outline: none; transition: border-color .2s; }
+    .field input:focus { border-color: #555; }
+    .btn-submit { width: 100%; background: #ff0099; border: none; border-radius: 4px; color: #fff; cursor: pointer; font-family: inherit; font-size: .95rem; font-weight: 700; padding: 13px; margin-top: 4px; transition: background .2s; letter-spacing: .05em; }
+    .btn-submit:hover { background: #cc007a; }
+    .error { background: #2a0a0a; border: 1px solid #8b0000; border-radius: 6px; color: #ff6b6b; font-size: .85rem; margin-bottom: 16px; padding: 10px 14px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="logo">RADICAL</div>
+    <div class="tabs">
+      <div class="tab active" data-tab="login">Sign In</div>
+      <div class="tab" data-tab="signup">Sign Up</div>
+    </div>
+    <div id="error" class="error" hidden></div>
+    <div class="field"><input id="username" type="text" placeholder="Username" autocomplete="username"></div>
+    <div class="field"><input id="password" type="password" placeholder="Password" autocomplete="current-password"></div>
+    <button class="btn-submit" id="submit">Sign In</button>
+  </div>
+  <script>
+    let mode = 'login';
+    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+      mode = t.dataset.tab;
+      document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === mode));
+      document.getElementById('submit').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+      document.getElementById('error').hidden = true;
+    }));
+    document.getElementById('submit').addEventListener('click', async () => {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('error');
+      errEl.hidden = true;
+      if (!username || !password) { errEl.textContent = 'Please fill in all fields'; errEl.hidden = false; return; }
+      try {
+        const res = await fetch(`/api/auth/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+        const data = await res.json();
+        if (!res.ok) { errEl.textContent = data.error || 'Something went wrong'; errEl.hidden = false; return; }
+        location.href = '/';
+      } catch { errEl.textContent = 'Network error'; errEl.hidden = false; }
+    });
+    document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('submit').click(); });
+  </script>
+</body>
+</html>

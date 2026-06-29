@@ -6,7 +6,7 @@
   <title>Radical Movies</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,16 +15,19 @@
   <nav class="nav" id="nav">
     <a class="nav-logo" href="/">RADICAL</a>
     <div class="nav-links">
-      <span class="nav-link active" data-section="home">Home</span>
-      <span class="nav-link" data-section="popular">Popular</span>
-      <span class="nav-link" data-section="top-rated">Top Rated</span>
-      <span class="nav-link" data-section="now-playing">Now Playing</span>
+      <span class="nav-link active" data-section="home">Movies</span>
+      <span class="nav-link" data-section="tv">TV Shows</span>
+      <span class="nav-link" data-section="library">Library <span class="lib-badge" id="libBadge" hidden>0</span></span>
     </div>
     <div class="nav-right">
       <div class="search-wrap">
         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input class="search-input" id="searchInput" type="text" placeholder="Search movies…" autocomplete="off">
+        <input class="search-input" id="searchInput" type="text" placeholder="Search…" autocomplete="off">
         <button class="search-clear" id="searchClear" hidden>✕</button>
+      </div>
+      <div class="nav-user" id="navUser">
+        <span class="nav-username" id="navUsername"></span>
+        <button class="logout-btn" id="logoutBtn">Sign out</button>
       </div>
     </div>
   </nav>
@@ -50,8 +53,20 @@
 
     <!-- Search Results (hidden by default) -->
     <section class="search-results" id="searchResults" hidden>
-      <h2 class="row-title" id="searchHeading">Results</h2>
-      <div class="grid" id="searchGrid"></div>
+      <div id="searchMoviesSection">
+        <h2 class="row-title">Movies</h2>
+        <div class="grid" id="searchGrid"></div>
+      </div>
+      <div id="searchTVSection" style="margin-top:32px">
+        <h2 class="row-title">TV Shows</h2>
+        <div class="grid" id="searchTVGrid"></div>
+      </div>
+    </section>
+
+    <!-- Library Section -->
+    <section class="library-section" id="librarySection" hidden>
+      <h2 class="row-title">My Library</h2>
+      <div class="library-grid" id="libraryGrid"></div>
     </section>
 
     <!-- Movie Rows -->
@@ -90,6 +105,22 @@
       </section>
     </div>
 
+    <!-- TV Show Rows -->
+    <div id="tvRows" hidden>
+      <section class="row">
+        <h2 class="row-title">Trending TV Shows</h2>
+        <div class="row-track" id="rowTVTrending"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Popular TV Shows</h2>
+        <div class="row-track" id="rowTVPopular"></div>
+      </section>
+      <section class="row">
+        <h2 class="row-title">Top Rated TV</h2>
+        <div class="row-track" id="rowTVTopRated"></div>
+      </section>
+    </div>
+
   </main>
 
   <!-- MOVIE DETAIL MODAL -->
@@ -110,6 +141,25 @@
         <button class="btn btn-watch btn-lg" id="modalWatch">▶  Watch Now</button>
       </div>
       <div class="modal-similar" id="modalSimilar"></div>
+    </div>
+  </div>
+
+  <!-- TV SHOW DETAIL MODAL -->
+  <div class="modal-wrap" id="tvModalWrap" hidden>
+    <div class="modal-backdrop" id="tvModalBackdrop"></div>
+    <div class="modal" id="tvModal">
+      <button class="modal-close" id="tvModalClose">✕</button>
+      <div class="modal-hero" id="tvModalHero"></div>
+      <div class="modal-body">
+        <div class="modal-left">
+          <h2 class="modal-title" id="tvModalTitle"></h2>
+          <div class="modal-meta" id="tvModalMeta"></div>
+          <p class="modal-overview" id="tvModalOverview"></p>
+        </div>
+        <div class="modal-right" id="tvModalRight"></div>
+      </div>
+      <div class="tv-seasons" id="tvSeasons"></div>
+      <div class="modal-similar" id="tvModalSimilar"></div>
     </div>
   </div>
 
@@ -147,6 +197,22 @@
     </div>
     <video class="player-video" id="videoEl" controls playsinline></video>
   </div>
+
+  <!-- MOBILE BOTTOM TAB BAR -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bottom-tab active" data-section="home">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+      <span>Movies</span>
+    </button>
+    <button class="bottom-tab" data-section="tv">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+      <span>TV Shows</span>
+    </button>
+    <button class="bottom-tab" data-section="library">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z"/></svg>
+      <span>Library <span class="bottom-badge" id="bottomBadge" hidden>0</span></span>
+    </button>
+  </nav>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js" type="module"></script>

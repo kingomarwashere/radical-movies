@@ -47,7 +47,12 @@ export async function searchYTS(title, year) {
   const seen = new Set();
   const unique = movies.filter(m => seen.has(m.id) ? false : seen.add(m.id));
 
-  for (const movie of unique) {
+  // Only return movies that match the requested year.
+  // Never fall back to a different year — a wrong movie is worse than no result.
+  const yearInt = year ? parseInt(year) : null;
+  const candidates = yearInt ? unique.filter(m => m.year === yearInt) : unique;
+
+  for (const movie of candidates) {
     const torrents = (movie.torrents ?? [])
       .filter(t => ['1080p', '720p'].includes(t.quality))
       .sort((a, b) => {

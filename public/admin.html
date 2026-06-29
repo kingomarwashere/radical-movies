@@ -5,31 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Radical Movies — Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:     #0d0d0d;
-      --bg2:    #161616;
-      --bg3:    #1e1e1e;
-      --border: #2a2a2a;
+      --bg:     #0a0a0a;
+      --bg2:    #111;
+      --bg3:    #1a1a1a;
+      --border: #222;
       --text:   #e5e5e5;
       --muted:  #666;
-      --red:    #e50914;
+      --red:    #ff0099;
       --green:  #22c55e;
       --yellow: #eab308;
       --blue:   #3b82f6;
       --orange: #f97316;
-      --mono:   'JetBrains Mono', monospace;
+      --mono:   'Roboto Mono', monospace;
     }
 
     body {
-      font-family: 'Inter', sans-serif;
+      font-family: 'Roboto Mono', monospace;
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      font-size: 13px;
+      font-size: 12px;
     }
 
     /* ── Header ── */
@@ -52,9 +52,10 @@
     .conn-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .header-right { display: flex; gap: 10px; }
     .btn {
-      padding: 6px 14px; border-radius: 5px; border: none;
-      font-size: 12px; font-weight: 600; cursor: pointer;
-      font-family: 'Inter', sans-serif; transition: opacity .15s;
+      padding: 6px 14px; border-radius: 4px; border: none;
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      font-family: 'Roboto Mono', monospace; transition: opacity .15s;
+      letter-spacing: .03em;
     }
     .btn:hover { opacity: .8; }
     .btn-ghost { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
@@ -239,10 +240,11 @@
           <th>Progress</th>
           <th>Quality</th>
           <th>Size</th>
+          <th>R2 Storage</th>
           <th>Speed</th>
           <th>Age</th>
-          <th>↓ Download</th>
-          <th>↑ Upload</th>
+          <th>↓ DL</th>
+          <th>↑ UP</th>
           <th></th>
         </tr>
       </thead>
@@ -260,7 +262,7 @@
     <div class="section-title">Server Log</div>
     <button class="btn btn-ghost btn-sm" id="btnClearLog">Clear</button>
   </div>
-  <pre id="logBox" style="background:#0a0a0a;border:1px solid #222;border-radius:6px;padding:12px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#aaa;height:220px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;">[connecting…]</pre>
+  <pre id="logBox" style="background:#050505;border:1px solid #222;border-radius:4px;padding:12px 14px;font-family:'Roboto Mono',monospace;font-size:11px;color:#aaa;height:220px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;">[connecting…]</pre>
 </div>
 
 <!-- System bar -->
