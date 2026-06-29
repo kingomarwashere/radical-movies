@@ -457,8 +457,9 @@ async function _streamFfmpegToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2
     '-loglevel', 'error',
     '-i', 'pipe:0',
     ...codecArgs,
+    '-map', '0:v:0', '-map', '0:a:0',
     '-f', 'mp4',
-    '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
     'pipe:1',
   ]);
   let ffErr = '';
@@ -588,13 +589,11 @@ export async function transcodeAudioAndUploadToR2(remotePath, fileSize, r2Upload
     const ff = spawn('ffmpeg', [
       '-loglevel', 'error',
       '-i', tmpFile,
+      '-map', '0:v:0', '-map', '0:a:0',
       '-c:v', 'copy',
       '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
       '-f', 'mp4',
-      // frag_keyframe  — new fragment at every keyframe (enables seeking)
-      // empty_moov     — tiny moov at start with no samples (required for pipe output)
-      // default_base_moof — correct base offsets so browser can calculate byte positions
-      '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
       'pipe:1',
     ]);
     let ffErr = '';
@@ -866,7 +865,8 @@ sys.stdout.write(json.dumps({'started': True}) + '\\n'); sys.stdout.flush()
 
 ff = subprocess.Popen(
     ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
-    ['-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', 'pipe:1'],
+    ['-map', '0:v:0', '-map', '0:a:0',
+     '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 'pipe:1'],
     stdout=subprocess.PIPE, stderr=subprocess.PIPE
 )
 
