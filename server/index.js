@@ -497,11 +497,14 @@ async function runPipeline(jobId) {
         uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
         console.log(`[pipeline] remux on seedbox: ${audioCodec}`);
       } else {
-        // Already MP4 + compatible audio: parallel direct upload, fastest path
-        r2Key     = `movies/${jobId}/${path.basename(remoteVideoPath)}`;
-        uploadMsg = 'Uploading to R2…';
-        uploadFn  = (cb) => parallelSftpToR2(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, remoteExt, cb);
-        console.log(`[pipeline] audio: direct upload (${audioCodec}, already mp4)`);
+        // MP4 + compatible audio: still remux through ffmpeg to guarantee fragmented MP4.
+        // Raw MP4 from torrents has moov at the END — browser can't start playing until it
+        // downloads the whole file (1-2 min for 2 GB). frag_keyframe+empty_moov puts the
+        // init segment at the START so the browser plays immediately.
+        r2Key     = `movies/${jobId}/${baseName}.mp4`;
+        uploadMsg = `Remuxing on seedbox (${audioCodec}, fMP4 for instant browser start)…`;
+        uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+        console.log(`[pipeline] audio: remux mp4→fmp4 on seedbox (${audioCodec})`);
       }
 
       emit({ status: 'uploading', progress: 0, message: uploadMsg });
