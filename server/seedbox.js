@@ -120,10 +120,10 @@ async function qbtLogin() {
       }
       throw new Error(`qBittorrent login failed: ${text.slice(0, 200) || String(resStatus)}`);
     }
-    // All retries exhausted — impose 5-min cooldown so we stop hammering the endpoint
-    _qbtCooldownUntil = Date.now() + 5 * 60_000;
-    console.error('[seedbox] qBit login failed after retries — 5 min cooldown started');
-    throw new Error('qBittorrent unavailable (502) — cooldown 5 min');
+    // All retries exhausted — impose 30-min cooldown to let nginx rate-limit reset
+    _qbtCooldownUntil = Date.now() + 30 * 60_000;
+    console.error('[seedbox] qBit login failed after retries — 30 min cooldown started');
+    throw new Error('qBittorrent unavailable (502) — cooldown 30 min');
   })().finally(() => { _loginPromise = null; });
 
   return _loginPromise;

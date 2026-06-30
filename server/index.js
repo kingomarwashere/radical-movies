@@ -644,6 +644,7 @@ httpServer.listen(PORT, async () => {
   if (!ffmpegOk) console.warn('  ⚠  ffmpeg not found — install with: brew install ffmpeg');
   if (!r2Configured) console.warn('  ⚠  R2 not configured — videos served from local storage');
   if (!process.env.TMDB_API_KEY) console.warn('  ⚠  TMDB_API_KEY missing — movie metadata will fail');
-  // Kick off background catalog sync after server has settled
-  setTimeout(() => syncCatalog().catch(e => console.error('[catalog] boot sync error:', e.message)), 10_000);
+  // Kick off background catalog sync after 20 minutes — gives qBit rate-limits time to reset
+  // Use /api/admin/catalog/retry to trigger immediately from the admin dashboard.
+  setTimeout(() => syncCatalog().catch(e => console.error('[catalog] boot sync error:', e.message)), 20 * 60_000);
 });
