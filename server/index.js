@@ -21,7 +21,7 @@ import {
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
   remuxOnSeedbox, transcodeOnSeedbox, probeRemoteAudioCodec, probeRemoteFileAudio,
   clearQbtCooldown, getQbtCooldownUntil, getActiveSeedboxOps,
-  incSeedboxOps, decSeedboxOps, getSeedboxDisk,
+  incSeedboxOps, decSeedboxOps, getSeedboxDisk, deleteSeedboxDir,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
@@ -528,7 +528,8 @@ async function runPipeline(jobId) {
 
     // Free the qBit slot after we have the path — avoids race where torrent is
     // deleted before findVideoFile can look up the actual save path via qBit API
-    if (torrentHash) deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
+    // Remove from qBit queue (frees slot) but keep files on disk — ffmpeg still needs them
+    if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
 
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
@@ -580,6 +581,8 @@ async function runPipeline(jobId) {
         decSeedboxOps();
       }
       trackBandwidth(remoteFileSize);
+      // Delete source files from seedbox NOW (after ffmpeg is done with them)
+      deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
 
       job.status    = 'ready';
       job.readyAt   = Date.now();
@@ -600,6 +603,7 @@ async function runPipeline(jobId) {
     await pullFileViaSftp(remoteVideoPath, localPath, (pct) => {
       emit({ status: 'downloading', progress: pct, message: `Pulling from seedbox… ${pct}%` });
     });
+    deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
 
     job._rawPath = localPath;
 

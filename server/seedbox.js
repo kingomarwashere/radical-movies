@@ -1055,6 +1055,21 @@ export function transcodeOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, 
     ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2'], onProgress);
 }
 
+// Delete a directory on the seedbox via SSH — used after upload to free disk
+export function deleteSeedboxDir(dirPath) {
+  return new Promise((resolve) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`rm -rf ${JSON.stringify(dirPath)}`, (err, stream) => {
+        if (err) { conn.end(); return resolve(); }
+        stream.on('close', () => { conn.end(); resolve(); });
+      });
+    });
+    conn.on('error', () => resolve()); // best-effort, never throw
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 export function getSeedboxSavePath(jobId) {
   return path.join(SAVE_PATH, jobId);

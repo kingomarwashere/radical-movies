@@ -268,7 +268,7 @@ function renderJobs(jobs) {
       <td><span class="badge badge-${j.status}">${j.status}</span></td>
       <td>${prog}</td>
       <td><span class="mono">${j.quality || '—'}</span></td>
-      <td><span class="mono muted">${j.size || '—'}</span></td>
+      <td><span class="mono muted">${fmtSize(j.size)}</span></td>
       <td>${r2Cell}</td>
       <td><span class="mono muted">${j.speed || '—'}</span></td>
       <td><span class="mono muted">${fmtUptime(age)}</span></td>
@@ -487,4 +487,16 @@ function fmtEta(s) {
 
 function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtSize(s) {
+  if (!s || s === '?') return '—';
+  const n = typeof s === 'number' ? s : (typeof s === 'string' && /^\d+$/.test(s.trim()) ? parseInt(s) : null);
+  if (n !== null) {
+    if (n >= 1e12) return `${(n / 1e12).toFixed(2)} TB`;
+    if (n >= 1e9)  return `${(n / 1e9).toFixed(2)} GB`;
+    if (n >= 1e6)  return `${(n / 1e6).toFixed(0)} MB`;
+    return `${n} B`;
+  }
+  return String(s);
 }
