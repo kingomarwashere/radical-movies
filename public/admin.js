@@ -78,6 +78,17 @@ function renderStats(jobs, streams, disk, server) {
 
   document.getElementById('statMem').textContent    = `${server.memUsed} MB`;
   document.getElementById('statUptime').textContent  = `up ${fmtUptime(server.uptime)}`;
+
+  // R2 storage — computed from the polled r2Objects map
+  const r2Bytes = [...r2Objects.values()].reduce((acc, o) => acc + (o.size || 0), 0);
+  const r2Gb    = r2Bytes / 1e9;
+  const r2Cost  = Math.max(0, r2Gb - 10) * 0.015; // $0.015/GB, first 10 GB free
+  const r2Label = r2Gb >= 1000
+    ? `${(r2Gb / 1000).toFixed(2)} TB`
+    : `${r2Gb.toFixed(1)} GB`;
+  document.getElementById('statR2Size').textContent = r2Label;
+  document.getElementById('statR2Sub').textContent  =
+    `${r2Objects.size} files · ~$${r2Cost.toFixed(2)}/mo · egress free`;
 }
 
 function renderStreams(streams) {
