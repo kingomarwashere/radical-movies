@@ -28,6 +28,7 @@ let currentSection = 'home'; // 'home' | 'tv' | 'library'
 let loggedInUser = null;
 let libraryPollTimer = null;
 let libraryData = [];
+let catalogData = [];
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -251,19 +252,32 @@ function createCard(m, type = 'movie') {
 
 function updateCardBadges() {
   document.querySelectorAll('.card[data-tmdb-id]').forEach(card => {
-    const id = parseInt(card.dataset.tmdbId);
-    const job = libraryData.find(j => j.tmdbId === id && j.status !== 'error');
+    // Skip catalog cards — they always show their own badge
+    if (card.classList.contains('catalog-card')) return;
+
+    const id   = parseInt(card.dataset.tmdbId);
+    const type = card.dataset.mediaType || 'movie';
+    const job  = libraryData.find(j => j.tmdbId === id && j.type === type && j.status !== 'error');
+    const cat  = !job && catalogData.find(c => c.tmdbId === id && c.type === type);
+
     let badge = card.querySelector('.card-lib-tag');
-    if (!job) { badge?.remove(); return; }
+    if (!job && !cat) { badge?.remove(); return; }
     if (!badge) {
       badge = document.createElement('div');
       badge.className = 'card-lib-tag';
       card.appendChild(badge);
     }
-    if (job.status === 'ready') { badge.textContent = '▶ Ready'; badge.dataset.state = 'ready'; }
-    else if (job.status === 'downloading') { badge.textContent = `↓ ${job.progress ?? 0}%`; badge.dataset.state = 'active'; }
-    else if (job.status === 'uploading') { badge.textContent = `↑ ${job.progress ?? 0}%`; badge.dataset.state = 'active'; }
-    else { badge.textContent = '⏳'; badge.dataset.state = 'active'; }
+    if (cat) {
+      badge.textContent = '▶ Ready'; badge.dataset.state = 'ready';
+    } else if (job.status === 'ready') {
+      badge.textContent = '▶ Ready'; badge.dataset.state = 'ready';
+    } else if (job.status === 'downloading') {
+      badge.textContent = `↓ ${job.progress ?? 0}%`; badge.dataset.state = 'active';
+    } else if (job.status === 'uploading') {
+      badge.textContent = `↑ ${job.progress ?? 0}%`; badge.dataset.state = 'active';
+    } else {
+      badge.textContent = '⌛'; badge.dataset.state = 'active';
+    }
   });
 }
 
@@ -317,9 +331,15 @@ async function openModal(tmdbId) {
       modalSimilar.innerHTML = '';
     }
 
-    // Show correct button state based on library
-    const inLibrary = libraryData.find(j => j.tmdbId === m.id && j.status !== 'error');
-    if (inLibrary?.status === 'ready') {
+    // Show correct button state — check catalog first, then personal library
+    const catalogItem = catalogData.find(c => c.tmdbId === m.id && c.type === 'movie');
+    const inLibrary   = libraryData.find(j => j.tmdbId === m.id && j.type === 'movie' && j.status !== 'error');
+
+    if (catalogItem?.streamUrl) {
+      modalWatch.textContent = '▶  Play Now';
+      modalWatch.disabled = false;
+      modalWatch.onclick = () => { closeModal(); openPlayer(catalogItem.streamUrl, m.title); };
+    } else if (inLibrary?.status === 'ready') {
       modalWatch.textContent = '▶  Play';
       modalWatch.disabled = false;
       modalWatch.onclick = () => { closeModal(); openPlayer(inLibrary.streamUrl, m.title); };
@@ -444,22 +464,33 @@ async function loadEpisodes(showId, showTitle, showYear, season) {
 
     list.innerHTML = '';
     for (const ep of episodes) {
+      const s0 = String(season).padStart(2, '0');
+      const e0 = String(ep.episode_number).padStart(2, '0');
+
+      // Check if this episode is already in the catalog (ready to play)
+      const catEp = catalogData.find(c =>
+        c.tmdbId === showId && c.type === 'tv' &&
+        c.season == season && c.episode == ep.episode_number
+      );
+      const btnLabel = catEp?.streamUrl ? '&#9654;' : '+';
+
       const epEl = document.createElement('div');
       epEl.className = 'episode-item';
       epEl.innerHTML = `
-        <div class="episode-num">E${String(ep.episode_number).padStart(2, '0')}</div>
+        <div class="episode-num">E${e0}</div>
         <div class="episode-info">
           <div class="episode-title">${escHtml(ep.name || '')}</div>
           <div class="episode-meta">${ep.air_date ? ep.air_date.slice(0, 4) : ''}${ep.runtime ? ' &middot; ' + ep.runtime + 'm' : ''}</div>
           ${ep.overview ? `<div class="episode-overview">${escHtml(ep.overview)}</div>` : ''}
         </div>
-        <button class="episode-add-btn" title="Add to library">+</button>
+        <button class="episode-add-btn${catEp ? ' episode-ready-btn' : ''}" title="${catEp ? 'Play' : 'Add to library'}">${btnLabel}</button>
       `;
       epEl.querySelector('.episode-add-btn').addEventListener('click', (e) => {
         const btn = e.currentTarget;
-        // Check if already in library
-        const s0 = String(season).padStart(2,'0');
-        const e0 = String(ep.episode_number).padStart(2,'0');
+        // Catalog item — play immediately
+        const cat = catalogData.find(c => c.tmdbId === showId && c.type === 'tv' && c.season == season && c.episode == ep.episode_number);
+        if (cat?.streamUrl) { openPlayer(cat.streamUrl, `${showTitle} S${s0}E${e0}`); return; }
+        // Personal library check
         const alreadyIn = libraryData.find(j => j.tmdbId === showId && j.season == season && j.episode == ep.episode_number && j.status !== 'error');
         if (alreadyIn) {
           if (alreadyIn.status === 'ready' && alreadyIn.streamUrl) { openPlayer(alreadyIn.streamUrl, `${showTitle} S${s0}E${e0}`); }
@@ -685,7 +716,9 @@ playerClose.addEventListener('click', () => {
 // ── Library polling ────────────────────────────────────────────────────────
 function startLibraryPolling() {
   fetchLibrary();
+  fetchCatalog();
   libraryPollTimer = setInterval(fetchLibrary, 5000);
+  setInterval(fetchCatalog, 30_000);
 }
 
 async function fetchLibrary() {
@@ -695,6 +728,77 @@ async function fetchLibrary() {
     updateCardBadges();
     if (currentSection === 'library') renderLibraryGrid();
   } catch {}
+}
+
+async function fetchCatalog() {
+  try {
+    const data = await fetch('/api/catalog').then(r => r.json());
+    catalogData = Array.isArray(data) ? data : [];
+    renderReadyNowRows();
+    updateCardBadges();
+  } catch {}
+}
+
+function renderReadyNowRows() {
+  const movies = catalogData.filter(c => c.type === 'movie');
+  const shows  = catalogData.filter(c => c.type === 'tv');
+
+  const rowNow   = $('rowReadyNow');
+  const trackNow = $('rowReadyNowTrack');
+  if (rowNow && trackNow) {
+    trackNow.innerHTML = '';
+    if (movies.length) {
+      movies.forEach(item => trackNow.appendChild(createCatalogCard(item)));
+      rowNow.hidden = false;
+    } else {
+      rowNow.hidden = true;
+    }
+  }
+
+  const rowTV   = $('rowReadyTV');
+  const trackTV = $('rowReadyTVTrack');
+  if (rowTV && trackTV) {
+    trackTV.innerHTML = '';
+    if (shows.length) {
+      shows.forEach(item => trackTV.appendChild(createCatalogCard(item)));
+      rowTV.hidden = false;
+    } else {
+      rowTV.hidden = true;
+    }
+  }
+}
+
+function createCatalogCard(item) {
+  const card = document.createElement('div');
+  card.className = 'card catalog-card';
+  card.dataset.tmdbId = item.tmdbId;
+  card.dataset.mediaType = item.type;
+
+  const displayTitle = item.showTitle || item.title || '';
+  const year = item.year || '';
+  const subLabel = item.type === 'tv' ? 'S01E01' : '';
+
+  card.innerHTML = `
+    <img class="card-img" src="${POSTER(item.posterPath)}" alt="${escHtml(displayTitle)}" loading="lazy">
+    <div class="card-play-btn">&#9654;</div>
+    <div class="card-info">
+      <div class="card-title">${escHtml(displayTitle)}</div>
+      <div class="card-meta">
+        ${year ? `<span>${year}</span>` : ''}
+        ${subLabel ? `<span class="card-rating">${subLabel}</span>` : ''}
+      </div>
+    </div>
+    <div class="card-lib-tag" data-state="ready">&#9654; Ready</div>
+  `;
+
+  card.addEventListener('click', () => {
+    const playTitle = item.type === 'tv'
+      ? `${item.showTitle || item.title} S01E01`
+      : (item.title || '');
+    openPlayer(item.streamUrl, playTitle);
+  });
+
+  return card;
 }
 
 function updateLibraryBadge() {

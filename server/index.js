@@ -24,6 +24,7 @@ import {
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
+import { initCatalog, syncCatalog, getCatalogItems, getCatalogStats } from './catalog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -129,6 +130,14 @@ app.get('/api/tv/search', wrap((req) => tmdb.searchTV(req.query.q, req.query.pag
 app.get('/api/tv/:id/season/:season', wrap((req) => tmdb.getTVSeason(req.params.id, req.params.season)));
 app.get('/api/tv/:id', wrap((req) => tmdb.getTVShow(req.params.id)));
 
+// ── Catalog ────────────────────────────────────────────────────────────────
+app.get('/api/catalog', (req, res) => res.json(getCatalogItems()));
+app.get('/api/catalog/stats', (req, res) => res.json(getCatalogStats()));
+app.post('/api/admin/catalog/sync', (req, res) => {
+  syncCatalog().catch(e => console.error('[catalog] admin sync error:', e.message));
+  res.json({ ok: true, message: 'Catalog sync started in background' });
+});
+
 // ── Library ────────────────────────────────────────────────────────────────
 app.get('/api/library', (req, res) => {
   const user = req.username;
@@ -146,7 +155,8 @@ app.post('/api/watch', async (req, res) => {
 
   // Queue limit
   const MAX_QUEUE = 25;
-  const activeCount = [...jobs.values()].filter(j => ['searching','downloading','uploading'].includes(j.status)).length;
+  // Exclude catalog (system) jobs from user queue limit
+  const activeCount = [...jobs.values()].filter(j => !j.catalog && ['searching','downloading','uploading'].includes(j.status)).length;
   if (activeCount >= MAX_QUEUE) return res.status(429).json({ error: `Queue full (${MAX_QUEUE} max). Wait for a slot.` });
 
   // Dedup: return existing job if we already have this content.
@@ -614,10 +624,14 @@ function cleanOldDownloads() {
 setInterval(cleanOldDownloads, 30 * 60 * 1000);
 
 // ── Boot ───────────────────────────────────────────────────────────────────
+initCatalog({ jobs, runPipeline, saveJobs });
+
 httpServer.listen(PORT, async () => {
   console.log(`\n🎬  Radical Movies → http://localhost:${PORT}\n`);
   const ffmpegOk = await isFfmpegAvailable().catch(() => false);
   if (!ffmpegOk) console.warn('  ⚠  ffmpeg not found — install with: brew install ffmpeg');
   if (!r2Configured) console.warn('  ⚠  R2 not configured — videos served from local storage');
   if (!process.env.TMDB_API_KEY) console.warn('  ⚠  TMDB_API_KEY missing — movie metadata will fail');
+  // Kick off background catalog sync after server has settled
+  setTimeout(() => syncCatalog().catch(e => console.error('[catalog] boot sync error:', e.message)), 10_000);
 });

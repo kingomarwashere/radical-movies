@@ -71,6 +71,12 @@
 
     <!-- Movie Rows -->
     <div id="rows">
+      <!-- Populated by catalog sync — hidden until content is ready -->
+      <section class="row row-ready" id="rowReadyNow" hidden>
+        <h2 class="row-title"><span class="ready-pulse"></span> Ready to Play</h2>
+        <div class="row-track" id="rowReadyNowTrack"></div>
+      </section>
+
       <section class="row">
         <h2 class="row-title">Trending This Week</h2>
         <div class="row-track" id="rowTrending"></div>
@@ -107,6 +113,11 @@
 
     <!-- TV Show Rows -->
     <div id="tvRows" hidden>
+      <section class="row row-ready" id="rowReadyTV" hidden>
+        <h2 class="row-title"><span class="ready-pulse"></span> Ready to Watch</h2>
+        <div class="row-track" id="rowReadyTVTrack"></div>
+      </section>
+
       <section class="row">
         <h2 class="row-title">Trending TV Shows</h2>
         <div class="row-track" id="rowTVTrending"></div>
