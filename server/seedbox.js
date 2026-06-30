@@ -75,9 +75,10 @@ async function qbtLogin() {
         headers: {
           'Authorization': `Basic ${BASIC}`,
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Connection': 'close', // force fresh TCP connection — avoid stale keep-alive being blocked
+          'Connection': 'close',
         },
         body: `username=${QB_USER}&password=${QB_PASS}`,
+        signal: AbortSignal.timeout(15_000), // 15s — prevents hung connections blocking forever
       });
       const setCookie = res.headers.get('set-cookie');
       if (setCookie) _cookie = setCookie.split(';')[0];
