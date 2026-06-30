@@ -70,16 +70,23 @@ async function qbtLogin() {
         console.log(`[seedbox] qBit login retry ${attempt} in ${delays[attempt] / 1000}s…`);
         await new Promise(r => setTimeout(r, delays[attempt]));
       }
-      const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${BASIC}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Connection': 'close',
-        },
-        body: `username=${QB_USER}&password=${QB_PASS}`,
-        signal: AbortSignal.timeout(15_000), // 15s — prevents hung connections blocking forever
-      });
+      let res;
+      try {
+        res = await fetch(`${QB_URL}/api/v2/auth/login`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${BASIC}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Connection': 'close',
+          },
+          body: `username=${QB_USER}&password=${QB_PASS}`,
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch (fetchErr) {
+        // Timeout (AbortError) or connection error — retry
+        console.warn(`[seedbox] qBit login fetch error (attempt ${attempt + 1}/${delays.length}): ${fetchErr.message}`);
+        continue;
+      }
       const setCookie = res.headers.get('set-cookie');
       if (setCookie) _cookie = setCookie.split(';')[0];
       const text = await res.text();
