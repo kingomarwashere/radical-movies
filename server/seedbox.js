@@ -478,9 +478,16 @@ export async function findVideoFile(jobId, torrentHash) {
     if (torrentHash) {
       const res  = await qbt(`/torrents/info?hashes=${torrentHash}`);
       const list = await res.json();
-      if (list[0]?.save_path) {
-        saveDir = list[0].save_path.replace(/\/$/, '');
-        console.log(`[sftp] using qBittorrent save path: ${saveDir}`);
+      if (list[0]) {
+        // content_path = actual root of downloaded files (may be a subdir of save_path)
+        // save_path = the configured destination directory
+        // Try content_path first — more accurate when torrent has its own subdirectory
+        const contentPath = (list[0].content_path || '').replace(/\/$/, '');
+        const savePath    = (list[0].save_path    || '').replace(/\/$/, '');
+        // If content_path is a file (single-file torrent), use its directory
+        const isFile = contentPath && path.extname(contentPath).length > 0;
+        saveDir = (isFile ? path.dirname(contentPath) : contentPath) || savePath || saveDir;
+        console.log(`[sftp] using qBittorrent path: ${saveDir}`);
       }
     }
     console.log(`[sftp] scanning ${saveDir} for video files`);

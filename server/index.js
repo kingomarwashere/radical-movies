@@ -507,7 +507,9 @@ async function runPipeline(jobId) {
       const audioCodecSSH   = await probeRemoteAudioCodec(remoteVideoPath);
       const audioCodec      = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
       console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown'} (via ${audioCodecSSH !== null ? 'ssh' : 'local-ffprobe'})`);
-      const SAFE_AUDIO = new Set(['aac', 'ac3', 'mp3', 'opus', 'vorbis']);
+      // Only AAC is universally supported in MP4 across Chrome/Brave/Safari/Firefox.
+      // AC3/EAC3 = Chrome/Brave silent. Opus/Vorbis = not supported in mp4. Transcode everything else.
+      const SAFE_AUDIO = new Set(['aac']);
       const needsAudioFix = audioCodec !== null
         ? !SAFE_AUDIO.has(audioCodec)
         : remoteExt !== '.mp4'; // probe failed — assume non-MP4 needs transcode
