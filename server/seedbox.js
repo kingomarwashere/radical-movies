@@ -3,6 +3,7 @@ import { Client as SSH2Client } from 'ssh2';
 import { Readable } from 'stream';
 import { spawn } from 'child_process';
 import path from 'path';
+import https from 'https';
 import fs from 'fs';
 import { createHash } from 'crypto';
 
@@ -70,37 +71,54 @@ async function qbtLogin() {
         console.log(`[seedbox] qBit login retry ${attempt} in ${delays[attempt] / 1000}s…`);
         await new Promise(r => setTimeout(r, delays[attempt]));
       }
-      let res;
+      // Use https.request directly — bypasses undici's connection pool which can
+      // cache stale/blocked connections and return 502 for a running server.
+      let loginResult;
       try {
-        res = await fetch(`${QB_URL}/api/v2/auth/login`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Basic ${BASIC}`,
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Connection': 'close',
-          },
-          body: `username=${QB_USER}&password=${QB_PASS}`,
-          signal: AbortSignal.timeout(15_000),
+        loginResult = await new Promise((resolve, reject) => {
+          const body = `username=${QB_USER}&password=${QB_PASS}`;
+          const urlObj = new URL(`${QB_URL}/api/v2/auth/login`);
+          const req = https.request({
+            hostname: urlObj.hostname,
+            port: urlObj.port || 443,
+            path: urlObj.pathname,
+            method: 'POST',
+            headers: {
+              'Authorization': `Basic ${BASIC}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Length': Buffer.byteLength(body),
+              'Connection': 'close',
+            },
+            agent: false, // disable keep-alive / connection pooling for this request
+          }, (r) => {
+            const cookies = r.headers['set-cookie'] || [];
+            const sid = cookies.map(c => c.split(';')[0]).find(c => c.startsWith('SID='));
+            let data = '';
+            r.on('data', chunk => { data += chunk; });
+            r.on('end', () => resolve({ status: r.statusCode, cookie: sid || null, text: data }));
+          });
+          req.on('error', reject);
+          req.setTimeout(15_000, () => { req.destroy(new Error('qBit login timeout')); });
+          req.write(body);
+          req.end();
         });
-      } catch (fetchErr) {
-        // Timeout (AbortError) or connection error — retry
-        console.warn(`[seedbox] qBit login fetch error (attempt ${attempt + 1}/${delays.length}): ${fetchErr.message}`);
+      } catch (reqErr) {
+        console.warn(`[seedbox] qBit login request error (attempt ${attempt + 1}/${delays.length}): ${reqErr.message}`);
         continue;
       }
-      const setCookie = res.headers.get('set-cookie');
-      if (setCookie) _cookie = setCookie.split(';')[0];
-      const text = await res.text();
+      if (loginResult.cookie) _cookie = loginResult.cookie;
+      const { status: resStatus, text } = loginResult;
       if (text === 'Ok.') {
         console.log('[seedbox] qBittorrent authenticated');
         _qbtCooldownUntil = 0;
         return;
       }
       const snippet = text.replace(/\s+/g, ' ').slice(0, 80);
-      console.warn(`[seedbox] qBit login HTTP ${res.status}: "${snippet}" (attempt ${attempt + 1}/${delays.length})`);
-      if (res.status === 502 || res.status === 503 || text.includes('Bad Gateway') || text.includes('Service Unavailable')) {
+      console.warn(`[seedbox] qBit login HTTP ${resStatus}: "${snippet}" (attempt ${attempt + 1}/${delays.length})`);
+      if (resStatus === 502 || resStatus === 503 || text.includes('Bad Gateway') || text.includes('Service Unavailable')) {
         continue; // retry
       }
-      throw new Error(`qBittorrent login failed: ${text.slice(0, 200)}`);
+      throw new Error(`qBittorrent login failed: ${text.slice(0, 200) || String(resStatus)}`);
     }
     // All retries exhausted — impose 5-min cooldown so we stop hammering the endpoint
     _qbtCooldownUntil = Date.now() + 5 * 60_000;
