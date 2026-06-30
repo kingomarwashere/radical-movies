@@ -116,6 +116,10 @@ function audioScore(t) {
 // Non-English language tags that appear in release names
 const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|japanese|chinese|turkish|swedish|norwegian|danish|finnish|polish|russian|romanian|hungarian|czech|slovak|ita|fre|spa|ger|por|dut|kor|jpn|chi|tur|swe|nor|dan|pol|rus|rum|hun|cze)\b/i;
 
+// Strip apostrophes for search queries — trackers index "Shadows Edge" not "Shadow's Edge".
+// makeTitleRe still makes apostrophes optional so the filter step matches either form.
+function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/\s+/g, ' ').trim(); }
+
 // Title words must appear in order with only separators between them.
 // "The Boys" → /the[.\s_\-]+boys/i — matches "The.Boys.S04E01" but NOT "The.Invisible.Boys".
 // Apostrophes are made optional so "Schindler's List" matches "Schindlers.List".
@@ -145,6 +149,7 @@ async function tlSearch(query) {
 }
 
 export async function searchTL(title, year) {
+  title = cleanQuery(title);
   const queries = [
     year ? `${title} ${year} 1080p mp4` : `${title} 1080p mp4`,
     year ? `${title} ${year} 1080p aac` : `${title} 1080p aac`,
@@ -263,6 +268,7 @@ async function tlFetchBinary(url) {
 }
 
 export async function searchTLEpisode(showTitle, season, episode) {
+  showTitle = cleanQuery(showTitle);
   const s = String(season).padStart(2, '0');
   const e = String(episode).padStart(2, '0');
   const tag = `S${s}E${e}`;

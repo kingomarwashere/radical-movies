@@ -49,6 +49,7 @@ function parseYtsSize(s) {
 }
 
 export async function searchYTS(title, year) {
+  title = title.replace(/[''`]/g, '').replace(/\s+/g, ' ').trim();
   // Try with year first, then title only
   const movies = (await ytsQuery(year ? `${title} ${year}` : title))
     .concat(year ? await ytsQuery(title) : []);

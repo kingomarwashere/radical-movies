@@ -42,6 +42,8 @@ function isNotCam(t) {
 const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|japanese|chinese|turkish|swedish|norwegian|danish|finnish|polish|russian|romanian|hungarian|czech|slovak|ita|fre|spa|ger|por|dut|kor|jpn|chi|tur|swe|nor|dan|pol|rus|rum|hun|cze)\b/i;
 function isEnglish(t) { return !FOREIGN_RE.test(t.name); }
 
+function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/\s+/g, ' ').trim(); }
+
 function makeTitleRe(title) {
   const words = title.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return /.*/;
@@ -57,6 +59,7 @@ function makeTitleRe(title) {
 const MAX_BYTES = 4 * 1024 ** 3;
 
 export async function searchTPB(title, year) {
+  title = cleanQuery(title);
   // Progressive attempts: HD with year → HD no year → all Video with year → all Video no year
   const attempts = [
     { q: `${title}${year ? ' ' + year : ''} 1080p`, cat: '207' },
@@ -106,6 +109,7 @@ export async function searchTPB(title, year) {
 }
 
 export async function searchTPBEpisode(showTitle, season, episode) {
+  showTitle = cleanQuery(showTitle);
   const s = String(season).padStart(2, '0');
   const e = String(episode).padStart(2, '0');
   const tag = `S${s}E${e}`;
