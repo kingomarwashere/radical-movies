@@ -489,13 +489,14 @@ async function runPipeline(jobId) {
       emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
     });
 
-    // Free the qBit slot immediately — we have the files on seedbox disk now
-    if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
-
-    // Scan the seedbox save dir to find the actual video file (avoids content_path quirks)
+    // Scan the seedbox save dir FIRST (uses qBit torrent info for actual path)
     job.downloadedAt = Date.now();
     emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
     const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
+
+    // Free the qBit slot after we have the path — avoids race where torrent is
+    // deleted before findVideoFile can look up the actual save path via qBit API
+    if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
 
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
