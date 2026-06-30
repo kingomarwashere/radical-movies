@@ -1015,7 +1015,7 @@ stderr_buf = []
 proc = subprocess.Popen(
     ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
     ['-map', '0:v:0', '-map', '0:a:0', '-movflags', '+faststart',
-     '-progress', 'pipe:2', '-stats_period', '3', '-y', TMPOUT],
+     '-progress', 'pipe:2', '-y', TMPOUT],
     stderr=subprocess.PIPE
 )
 
