@@ -104,6 +104,26 @@
     .stat-value.orange { color: var(--orange); }
     .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--mono); }
 
+    /* ── Seedbox health ── */
+    .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .health-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 14px 16px;
+    }
+    .health-card.warn  { border-color: var(--yellow); }
+    .health-card.crit  { border-color: var(--red); }
+    .health-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .health-value { font-size: 20px; font-weight: 700; font-family: var(--mono); line-height: 1; }
+    .health-value.ok     { color: var(--green); }
+    .health-value.warn   { color: var(--yellow); }
+    .health-value.crit   { color: var(--red); }
+    .health-bar-wrap { margin: 8px 0 4px; background: var(--bg3); border-radius: 3px; height: 4px; overflow: hidden; }
+    .health-bar-fill { height: 100%; border-radius: 3px; transition: width .4s; }
+    .health-bar-fill.ok   { background: var(--green); }
+    .health-bar-fill.warn { background: var(--yellow); }
+    .health-bar-fill.crit { background: var(--red); }
+    .health-sub { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
     /* ── Sections ── */
     .section { padding: 20px 24px; }
     .section-header {
@@ -275,6 +295,38 @@
       <div class="stat-label">Memory</div>
       <div class="stat-value" id="statMem">—</div>
       <div class="stat-sub" id="statUptime"></div>
+    </div>
+  </div>
+
+  <!-- Seedbox Health -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Seedbox Health</div>
+    </div>
+    <div class="health-grid" id="healthGrid">
+      <div class="health-card" id="hcOps">
+        <div class="health-label">Concurrent Ops</div>
+        <div class="health-value ok" id="hOps">—</div>
+        <div class="health-bar-wrap"><div class="health-bar-fill ok" id="hOpsBar" style="width:0%"></div></div>
+        <div class="health-sub" id="hOpsSub">active seedbox sessions</div>
+      </div>
+      <div class="health-card" id="hcBw">
+        <div class="health-label">Monthly Upload</div>
+        <div class="health-value ok" id="hBw">—</div>
+        <div class="health-bar-wrap"><div class="health-bar-fill ok" id="hBwBar" style="width:0%"></div></div>
+        <div class="health-sub" id="hBwSub">of 20 TB limit</div>
+      </div>
+      <div class="health-card" id="hcDisk">
+        <div class="health-label">Seedbox Disk Free</div>
+        <div class="health-value ok" id="hDisk">—</div>
+        <div class="health-bar-wrap"><div class="health-bar-fill ok" id="hDiskBar" style="width:0%"></div></div>
+        <div class="health-sub" id="hDiskSub">of ~4 TB total</div>
+      </div>
+      <div class="health-card" id="hcQbt">
+        <div class="health-label">qBittorrent</div>
+        <div class="health-value ok" id="hQbt">—</div>
+        <div class="health-sub" id="hQbtSub">session status</div>
+      </div>
     </div>
   </div>
 

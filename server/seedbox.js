@@ -45,7 +45,25 @@ const SFTP_PORT   = parseInt(process.env.SEEDBOX_SFTP_PORT || '2100');
 const SAVE_PATH   = process.env.SEEDBOX_SAVE_PATH || '/home/seedit4me/torrents/qbittorrent';
 
 export const seedboxConfigured = !!(process.env.SEEDBOX_QB_URL || QB_URL);
-export function clearQbtCooldown() { _qbtCooldownUntil = 0; console.log('[seedbox] qBit cooldown cleared'); }
+export function clearQbtCooldown()     { _qbtCooldownUntil = 0; console.log('[seedbox] qBit cooldown cleared'); }
+export function getQbtCooldownUntil()  { return _qbtCooldownUntil; }
+export function getActiveSeedboxOps()  { return _activeSeedboxOps; }
+export function incSeedboxOps()        { _activeSeedboxOps++; }
+export function decSeedboxOps()        { _activeSeedboxOps = Math.max(0, _activeSeedboxOps - 1); }
+
+export async function getSeedboxDisk() {
+  if (Date.now() - _sbDiskCachedAt < 60_000) return _sbDiskFreeGb;
+  try {
+    const res  = await qbt('/sync/maindata');
+    const data = await res.json();
+    const free = data?.server_state?.free_space_on_disk ?? null;
+    _sbDiskFreeGb   = free !== null ? Math.round(free / 1e9 * 10) / 10 : null;
+    _sbDiskCachedAt = Date.now();
+  } catch {
+    _sbDiskCachedAt = Date.now();
+  }
+  return _sbDiskFreeGb;
+}
 
 const BASIC = Buffer.from(`${QB_USER}:${QB_PASS}`).toString('base64');
 
@@ -53,6 +71,9 @@ const BASIC = Buffer.from(`${QB_USER}:${QB_PASS}`).toString('base64');
 let _cookie = null;
 let _loginPromise = null;   // serialise concurrent auth requests
 let _qbtCooldownUntil = 0; // global back-off after repeated 502s
+let _activeSeedboxOps = 0; // concurrent ffmpeg/upload sessions on seedbox
+let _sbDiskCachedAt   = 0;
+let _sbDiskFreeGb     = null;
 
 async function qbtLogin() {
   if (_loginPromise) return _loginPromise;

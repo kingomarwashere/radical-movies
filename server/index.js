@@ -20,7 +20,8 @@ import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
   remuxOnSeedbox, transcodeOnSeedbox, probeRemoteAudioCodec, probeRemoteFileAudio,
-  clearQbtCooldown,
+  clearQbtCooldown, getQbtCooldownUntil, getActiveSeedboxOps,
+  incSeedboxOps, decSeedboxOps, getSeedboxDisk,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
@@ -93,6 +94,25 @@ const activeStreams  = new Map(); // streamId → { jobId, title, ip, startedAt,
 const JOBS_FILE = process.env.DATA_DIR
   ? path.join(process.env.DATA_DIR, 'jobs.json')
   : path.join(__dirname, '..', 'jobs.json');
+
+// ── Bandwidth tracking ────────────────────────────────────────────────────
+const BANDWIDTH_FILE = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'bandwidth.json')
+  : path.join(__dirname, '..', 'bandwidth.json');
+let _bw = { month: '', bytes: 0 };
+try {
+  if (fs.existsSync(BANDWIDTH_FILE)) _bw = JSON.parse(fs.readFileSync(BANDWIDTH_FILE, 'utf8'));
+} catch {}
+function trackBandwidth(bytes) {
+  const month = new Date().toISOString().slice(0, 7);
+  if (_bw.month !== month) _bw = { month, bytes: 0 };
+  _bw.bytes += (bytes || 0);
+  try { fs.writeFileSync(BANDWIDTH_FILE, JSON.stringify(_bw)); } catch {}
+}
+function getMonthlyBandwidthGb() {
+  const month = new Date().toISOString().slice(0, 7);
+  return _bw.month === month ? Math.round(_bw.bytes / 1e9 * 10) / 10 : 0;
+}
 
 function saveJobs() {
   const out = {};
@@ -392,6 +412,9 @@ async function buildAdminStats() {
   const jobList = [...jobs.values()].map(sanitize).sort((a, b) => b.createdAt - a.createdAt);
   const streams = [...activeStreams.values()];
 
+  const cooldownUntil = getQbtCooldownUntil();
+  const sbDiskFreeGb  = seedboxConfigured ? await getSeedboxDisk().catch(() => null) : null;
+
   return {
     jobs: jobList,
     streams,
@@ -401,6 +424,15 @@ async function buildAdminStats() {
       memUsed:  Math.round(process.memoryUsage().rss / 1e6),
       r2:       r2Configured,
       ffmpeg:   await isFfmpegAvailable().catch(() => false),
+    },
+    seedbox: {
+      activeSeedboxOps: getActiveSeedboxOps(),
+      cooldownUntil,
+      cooldownSecsLeft: cooldownUntil > Date.now() ? Math.ceil((cooldownUntil - Date.now()) / 1000) : 0,
+      diskFreeGb:       sbDiskFreeGb,
+      monthlyUploadGb:  getMonthlyBandwidthGb(),
+      monthlyLimitGb:   20000,
+      diskTotalGb:      4000,
     },
   };
 }
@@ -496,7 +528,7 @@ async function runPipeline(jobId) {
 
     // Free the qBit slot after we have the path — avoids race where torrent is
     // deleted before findVideoFile can look up the actual save path via qBit API
-    if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
+    if (torrentHash) deleteTorrent(torrentHash, true).catch(e => console.warn('[seedbox] delete failed:', e.message));
 
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
@@ -541,7 +573,13 @@ async function runPipeline(jobId) {
       }
 
       emit({ status: 'uploading', progress: 0, message: uploadMsg });
-      await uploadFn((pct) => emit({ status: 'uploading', progress: pct, message: `${uploadMsg.replace('…', '')} ${pct}%` }));
+      incSeedboxOps();
+      try {
+        await uploadFn((pct) => emit({ status: 'uploading', progress: pct, message: `${uploadMsg.replace('…', '')} ${pct}%` }));
+      } finally {
+        decSeedboxOps();
+      }
+      trackBandwidth(remoteFileSize);
 
       job.status    = 'ready';
       job.readyAt   = Date.now();

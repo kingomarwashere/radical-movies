@@ -38,8 +38,9 @@ tabBtns.forEach(btn => {
 });
 
 // ── Render ──────────────────────────────────────────────────────────────────
-function render({ jobs, streams, disk, server }) {
+function render({ jobs, streams, disk, server, seedbox }) {
   renderStats(jobs, streams, disk, server);
+  renderHealth(seedbox || {});
   renderStreams(streams);
   renderUsers(jobs, streams);
   renderJobs(jobs);
@@ -279,6 +280,67 @@ function renderJobs(jobs) {
       </td>
     </tr>`;
   }).join('');
+}
+
+function renderHealth({ activeSeedboxOps = 0, cooldownSecsLeft = 0, diskFreeGb = null, monthlyUploadGb = 0, monthlyLimitGb = 20000, diskTotalGb = 4000 } = {}) {
+  function setCard(cardId, valueId, barId, subId, value, pct, level, valueTxt, subTxt) {
+    const card = document.getElementById(cardId);
+    const val  = document.getElementById(valueId);
+    const bar  = document.getElementById(barId);
+    const sub  = document.getElementById(subId);
+    card.className = `health-card${level === 'warn' ? ' warn' : level === 'crit' ? ' crit' : ''}`;
+    val.className  = `health-value ${level}`;
+    val.textContent = valueTxt;
+    if (bar) { bar.style.width = Math.min(100, pct) + '%'; bar.className = `health-bar-fill ${level}`; }
+    if (sub) sub.textContent = subTxt;
+  }
+
+  // Concurrent ops (warn ≥3, crit ≥6 out of 25 max jobs)
+  const opsLevel = activeSeedboxOps >= 6 ? 'crit' : activeSeedboxOps >= 3 ? 'warn' : 'ok';
+  setCard('hcOps','hOps','hOpsBar','hOpsSub',
+    activeSeedboxOps, activeSeedboxOps / 10 * 100, opsLevel,
+    String(activeSeedboxOps),
+    activeSeedboxOps === 1 ? '1 active ffmpeg session' : `${activeSeedboxOps} active ffmpeg sessions`);
+
+  // Monthly bandwidth (warn ≥75%, crit ≥90%)
+  const bwPct   = monthlyLimitGb > 0 ? monthlyUploadGb / monthlyLimitGb * 100 : 0;
+  const bwLevel = bwPct >= 90 ? 'crit' : bwPct >= 75 ? 'warn' : 'ok';
+  const bwTxt   = monthlyUploadGb >= 1000 ? `${(monthlyUploadGb/1000).toFixed(1)} TB` : `${monthlyUploadGb} GB`;
+  setCard('hcBw','hBw','hBwBar','hBwSub',
+    bwPct, bwPct, bwLevel,
+    bwTxt,
+    `${bwPct.toFixed(1)}% of 20 TB limit this month`);
+
+  // Seedbox disk free (warn <1 TB, crit <500 GB)
+  if (diskFreeGb !== null) {
+    const diskUsedGb = diskTotalGb - diskFreeGb;
+    const diskPct    = diskTotalGb > 0 ? diskUsedGb / diskTotalGb * 100 : 0;
+    const diskLevel  = diskFreeGb < 500 ? 'crit' : diskFreeGb < 1000 ? 'warn' : 'ok';
+    const diskTxt    = diskFreeGb >= 1000 ? `${(diskFreeGb/1000).toFixed(1)} TB` : `${diskFreeGb} GB`;
+    setCard('hcDisk','hDisk','hDiskBar','hDiskSub',
+      diskPct, diskPct, diskLevel, diskTxt,
+      `free — ${diskPct.toFixed(0)}% used of ${(diskTotalGb/1000).toFixed(0)} TB`);
+  } else {
+    document.getElementById('hDisk').textContent = '—';
+    document.getElementById('hDiskSub').textContent = 'unavailable';
+  }
+
+  // qBit status
+  const qbtCard = document.getElementById('hcQbt');
+  const qbtVal  = document.getElementById('hQbt');
+  const qbtSub  = document.getElementById('hQbtSub');
+  if (cooldownSecsLeft > 0) {
+    qbtCard.className = 'health-card crit';
+    qbtVal.className  = 'health-value crit';
+    qbtVal.textContent = 'COOLDOWN';
+    const mins = Math.ceil(cooldownSecsLeft / 60);
+    qbtSub.textContent = `${mins}m remaining — all jobs blocked`;
+  } else {
+    qbtCard.className = 'health-card';
+    qbtVal.className  = 'health-value ok';
+    qbtVal.textContent = 'OK';
+    qbtSub.textContent = 'session active';
+  }
 }
 
 function renderSysbar(server) {
