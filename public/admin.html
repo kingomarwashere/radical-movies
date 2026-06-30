@@ -321,12 +321,18 @@
 <div id="tab-jobs" hidden>
   <div class="section">
     <div class="section-header">
-      <div class="section-title">Jobs</div>
+      <div class="section-title">Jobs <span class="muted" id="selCount" style="font-size:11px;font-weight:400"></span></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-ghost btn-sm" id="btnSelectAll">☐ Select All</button>
+        <button class="btn btn-ghost btn-sm" id="btnSelectNone" hidden>✕ Clear</button>
+        <button class="btn btn-sm" id="btnDeleteSelected" hidden style="background:var(--red);color:#fff">🗑 Delete Selected</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
+            <th style="width:32px"><input type="checkbox" id="chkAll" title="Select all"></th>
             <th>Title</th>
             <th>User</th>
             <th>Status</th>
@@ -342,7 +348,7 @@
           </tr>
         </thead>
         <tbody id="jobsTbody">
-          <tr><td colspan="12" class="empty">No jobs yet</td></tr>
+          <tr><td colspan="13" class="empty">No jobs yet</td></tr>
         </tbody>
       </table>
     </div>

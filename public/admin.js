@@ -257,7 +257,8 @@ function renderJobs(jobs) {
       ? '<span class="muted" style="font-size:10px">catalog</span>'
       : `<span style="color:#aaa">${esc(j.user || '—')}</span>`;
 
-    return `<tr>
+    return `<tr data-job-id="${j.id}">
+      <td><input type="checkbox" class="job-chk" data-id="${j.id}"></td>
       <td>
         <div class="title-cell">${esc(j.title)}</div>
         <div class="title-year">${j.year || ''}${subMsg ? ' · <span style="color:' + (j.status==='error'?'var(--red)':'#888') + '">' + esc(subMsg) + '</span>' : ''}</div>
@@ -343,9 +344,62 @@ document.getElementById('btnCatalogRetry')?.addEventListener('click', async () =
   appendLog('[LOG] Catalog retry (cooldown cleared) triggered');
 });
 
+// ── Bulk selection ────────────────────────────────────────────────────────────
+function getCheckedIds() {
+  return [...document.querySelectorAll('.job-chk:checked')].map(c => c.dataset.id);
+}
+
+function updateSelectionUI() {
+  const ids   = getCheckedIds();
+  const total = document.querySelectorAll('.job-chk').length;
+  const selCount = document.getElementById('selCount');
+  const btnSel   = document.getElementById('btnSelectAll');
+  const btnNone  = document.getElementById('btnSelectNone');
+  const btnDel   = document.getElementById('btnDeleteSelected');
+  const chkAll   = document.getElementById('chkAll');
+  if (ids.length === 0) {
+    selCount.textContent = '';
+    btnSel.hidden  = false; btnNone.hidden = true; btnDel.hidden = true;
+    if (chkAll) { chkAll.checked = false; chkAll.indeterminate = false; }
+  } else {
+    selCount.textContent = `(${ids.length} selected)`;
+    btnSel.hidden  = ids.length === total;
+    btnNone.hidden = false; btnDel.hidden = false;
+    if (chkAll) { chkAll.checked = ids.length === total; chkAll.indeterminate = ids.length < total; }
+  }
+}
+
+document.getElementById('chkAll')?.addEventListener('change', (e) => {
+  document.querySelectorAll('.job-chk').forEach(c => { c.checked = e.target.checked; });
+  updateSelectionUI();
+});
+document.getElementById('btnSelectAll')?.addEventListener('click', () => {
+  document.querySelectorAll('.job-chk').forEach(c => { c.checked = true; });
+  updateSelectionUI();
+});
+document.getElementById('btnSelectNone')?.addEventListener('click', () => {
+  document.querySelectorAll('.job-chk').forEach(c => { c.checked = false; });
+  updateSelectionUI();
+});
+document.getElementById('btnDeleteSelected')?.addEventListener('click', async () => {
+  const ids = getCheckedIds();
+  if (!ids.length) return;
+  const btn = document.getElementById('btnDeleteSelected');
+  btn.textContent = `Deleting ${ids.length}…`;
+  btn.disabled = true;
+  await Promise.all(ids.map(id => fetch(`/api/admin/job/${id}`, { method: 'DELETE' })));
+  btn.textContent = '🗑 Delete Selected';
+  btn.disabled = false;
+  appendLog(`[LOG] Deleted ${ids.length} jobs`);
+});
+
+// Per-row delete + checkbox change
 document.getElementById('jobsTbody').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-delete]');
   if (btn) deleteJob(btn.dataset.delete);
+});
+document.getElementById('jobsTbody').addEventListener('change', (e) => {
+  if (e.target.classList.contains('job-chk')) updateSelectionUI();
 });
 
 // ── Util ─────────────────────────────────────────────────────────────────────
