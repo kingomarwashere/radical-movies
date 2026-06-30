@@ -19,7 +19,8 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  remuxOnSeedbox, transcodeOnSeedbox, probeRemoteAudioCodec, probeRemoteFileAudio,
+  remuxOnSeedbox, transcodeOnSeedbox, transcodeVideoOnSeedbox,
+  probeRemoteAudioCodec, probeRemoteFileAudio, probeRemoteCodecs,
   clearQbtCooldown, getQbtCooldownUntil, getActiveSeedboxOps,
   incSeedboxOps, decSeedboxOps, getSeedboxDisk, deleteSeedboxDir,
 } from './seedbox.js';
@@ -608,43 +609,50 @@ async function runPipeline(jobId) {
     if (r2Configured) {
       const remoteExt = path.extname(remoteVideoPath).toLowerCase();
 
-      // Probe audio codec: try SSH exec on seedbox first (instant, no data transfer).
-      // Fall back to downloading first 1 MB and running local ffprobe on Fly.io.
-      emit({ status: 'uploading', progress: 0, message: 'Probing audio codec…' });
-      const audioCodecSSH   = await probeRemoteAudioCodec(remoteVideoPath);
-      const audioCodec      = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
-      console.log(`[pipeline] audio probe: ${audioCodec ?? 'unknown'} (via ${audioCodecSSH !== null ? 'ssh' : 'local-ffprobe'})`);
-      // Only AAC is universally supported in MP4 across Chrome/Brave/Safari/Firefox.
-      // AC3/EAC3 = Chrome/Brave silent. Opus/Vorbis = not supported in mp4. Transcode everything else.
+      // Probe both audio and video codecs in one SSH call
+      emit({ status: 'uploading', progress: 0, message: 'Probing codecs…' });
+      const { audio: audioCodecSSH, video: videoCodecSSH } = await probeRemoteCodecs(remoteVideoPath);
+      const audioCodec = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
+      const videoCodec = videoCodecSSH;
+      console.log(`[pipeline] codecs — video: ${videoCodec ?? 'unknown'}, audio: ${audioCodec ?? 'unknown'}`);
+
+      // H.264 (h264/avc1) is the only video codec with universal browser support including Safari.
+      // H.265/HEVC plays in Chrome via software decode but fails in Safari on most hardware.
+      const SAFE_VIDEO = new Set(['h264', 'avc1', 'mpeg4']);
       const SAFE_AUDIO = new Set(['aac']);
+      const needsVideoFix = videoCodec !== null && !SAFE_VIDEO.has(videoCodec);
       const needsAudioFix = audioCodec !== null
         ? !SAFE_AUDIO.has(audioCodec)
-        : remoteExt !== '.mp4'; // probe failed — assume non-MP4 needs transcode
+        : remoteExt !== '.mp4';
 
       const baseName = path.basename(remoteVideoPath, remoteExt);
       let r2Key, uploadMsg, uploadFn;
 
-      if (needsAudioFix) {
-        // DTS / EAC3 / unknown non-MP4: transcode audio → AAC on seedbox, output fMP4 to R2
+      if (needsVideoFix) {
+        // H.265 / AV1 / VP9: must re-encode video to H.264 for Safari.
+        // CRF 20 + fast preset: ~5-10 min for a 2h movie on seedbox CPU.
         r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Transcoding on seedbox (${audioCodec ?? 'unknown'} → AAC)…`;
+        uploadMsg = `Transcoding on seedbox (${videoCodec}→H.264${needsAudioFix ? ', ' + audioCodec + '→AAC' : ''})…`;
+        uploadFn  = (cb) => transcodeVideoOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb, needsAudioFix);
+        console.log(`[pipeline] transcode video: ${videoCodec}→h264${needsAudioFix ? ` + audio: ${audioCodec}→aac` : ''}`);
+      } else if (needsAudioFix) {
+        // H.264 video + bad audio (DTS/EAC3): re-encode audio only
+        r2Key     = `movies/${jobId}/${baseName}.mp4`;
+        uploadMsg = `Transcoding on seedbox (${audioCodec ?? 'unknown'}→AAC)…`;
         uploadFn  = (cb) => transcodeOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] transcode on seedbox: ${audioCodec ?? 'unknown'} → aac`);
+        console.log(`[pipeline] transcode audio: ${audioCodec ?? 'unknown'}→aac`);
       } else if (remoteExt !== '.mp4') {
-        // AC3 / AAC in MKV: container remux only on seedbox — no audio re-encode
+        // H.264 + AAC in MKV: container remux only
         r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Remuxing on seedbox (${audioCodec ?? 'ac3'}, no transcode)…`;
+        uploadMsg = `Remuxing on seedbox (MKV→MP4)…`;
         uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] remux on seedbox: ${audioCodec}`);
+        console.log(`[pipeline] remux: mkv→mp4`);
       } else {
-        // MP4 + compatible audio: still remux through ffmpeg to guarantee fragmented MP4.
-        // Raw MP4 from torrents has moov at the END — browser can't start playing until it
-        // downloads the whole file (1-2 min for 2 GB). frag_keyframe+empty_moov puts the
-        // init segment at the START so the browser plays immediately.
+        // Already H.264 + AAC + MP4: remux to fMP4 for instant browser start
         r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Remuxing on seedbox (${audioCodec}, fMP4 for instant browser start)…`;
+        uploadMsg = `Remuxing on seedbox (fMP4 for instant start)…`;
         uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] audio: remux mp4→fmp4 on seedbox (${audioCodec})`);
+        console.log(`[pipeline] remux mp4→fmp4 (${audioCodec})`);
       }
 
       emit({ status: 'uploading', progress: 0, message: uploadMsg });

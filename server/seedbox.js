@@ -922,23 +922,40 @@ export async function probeRemoteFileAudio(remotePath, tempDir = '/tmp') {
   }
 }
 
-// Probe the primary audio codec of a remote file via SSH + ffprobe.
-// Returns codec name (e.g. 'aac', 'ac3', 'dts', 'eac3') or null if ffprobe unavailable.
-export async function probeRemoteAudioCodec(remotePath) {
+// Probe audio and video codecs in a single SSH connection — faster than two separate calls.
+// Returns { audio, video } where each is the codec name string or null.
+export async function probeRemoteCodecs(remotePath) {
   return new Promise((resolve) => {
     const conn = new SSH2Client();
     conn.on('ready', () => {
-      const cmd = `ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 ${JSON.stringify(remotePath)} 2>/dev/null`;
+      // One ffprobe call — prints audio stream first, then video
+      const cmd = `ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 ${JSON.stringify(remotePath)} 2>/dev/null`;
       conn.exec(cmd, (err, stream) => {
-        if (err) { conn.end(); return resolve(null); }
+        if (err) { conn.end(); return resolve({ audio: null, video: null }); }
         let out = '';
         stream.stdout.on('data', d => { out += d; });
-        stream.on('close', () => { conn.end(); resolve(out.trim().toLowerCase() || null); });
+        stream.on('close', () => {
+          conn.end();
+          let audio = null, video = null;
+          for (const line of out.trim().split('\n')) {
+            const [codec, type] = line.trim().split(',');
+            if (!codec || !type) continue;
+            if (type === 'audio' && !audio) audio = codec.toLowerCase();
+            if (type === 'video' && !video) video = codec.toLowerCase();
+          }
+          resolve({ audio, video });
+        });
       });
     });
-    conn.on('error', () => resolve(null));
+    conn.on('error', () => resolve({ audio: null, video: null }));
     conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
   });
+}
+
+// Legacy single-stream probe — kept for callers that only need audio
+export async function probeRemoteAudioCodec(remotePath) {
+  const { audio } = await probeRemoteCodecs(remotePath);
+  return audio;
 }
 
 // ── ffmpeg on seedbox → R2 ───────────────────────────────────────────────────
@@ -1059,17 +1076,28 @@ finally:
   });
 }
 
-// Remux container only (no audio re-encode) — I/O bound, very fast
+// Remux container only (no re-encode) — I/O bound, very fast
 export function remuxOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
   console.log(`[seedbox] remux on seedbox: ${path.basename(remotePath)}`);
   return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, ['-c', 'copy'], onProgress);
 }
 
-// Transcode audio to AAC on seedbox — uses seedbox CPU, not Fly.io
+// Re-encode audio to AAC only — video stream copied
 export function transcodeOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress) {
-  console.log(`[seedbox] transcode on seedbox: ${path.basename(remotePath)}`);
+  console.log(`[seedbox] transcode audio on seedbox: ${path.basename(remotePath)}`);
   return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
     ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2'], onProgress);
+}
+
+// Re-encode video H.265→H.264 for Safari compatibility + optionally audio→AAC
+// CRF 20 + fast preset: ~7 min for a 2h movie on seedbox CPU — acceptable for correctness
+export function transcodeVideoOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, onProgress, audioNeedsTranscode = false) {
+  const audioArgs = audioNeedsTranscode
+    ? ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+    : ['-c:a', 'copy'];
+  console.log(`[seedbox] transcode video (H.265→H.264)${audioNeedsTranscode ? ' + audio→AAC' : ''}: ${path.basename(remotePath)}`);
+  return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
+    ['-c:v', 'libx264', '-crf', '20', '-preset', 'fast', ...audioArgs], onProgress);
 }
 
 // Delete a directory on the seedbox via SSH — used after upload to free disk
