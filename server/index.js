@@ -24,6 +24,7 @@ import {
   incSeedboxOps, decSeedboxOps, getSeedboxDisk, deleteSeedboxDir,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
+import { searchNyaa } from './nyaa.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 import { initCatalog, syncCatalog, getCatalogItems, getCatalogStats } from './catalog.js';
@@ -478,6 +479,11 @@ async function runPipeline(jobId) {
     if (!torrent) {
       emit({ message: 'Not on EZTV — trying The Pirate Bay…' });
       torrent = await searchTPBEpisode(job.showTitle, job.season, job.episode).catch(e => { console.error('[tpb]', e.message); return null; });
+    }
+
+    if (!torrent) {
+      emit({ message: 'Not on TPB — trying Nyaa (anime)…' });
+      torrent = await searchNyaa(job.showTitle, job.season, job.episode).catch(e => { console.error('[nyaa]', e.message); return null; });
     }
   } else {
     // Movie: TorrentLeech first (private, high seeds), then YTS, then TPB
