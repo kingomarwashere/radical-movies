@@ -674,22 +674,29 @@ function fmtEta(seconds) {
 }
 
 // ── Player ─────────────────────────────────────────────────────────────────
+let _currentStreamId = null;
+
 function openPlayer(streamUrl, title) {
-    fetchOverlay.hidden = true;
+  fetchOverlay.hidden = true;
   document.body.style.overflow = 'hidden';
   playerTitle.textContent = title || '';
   videoEl.src = streamUrl;
   playerOverlay.hidden = false;
   videoEl.play().catch(() => {});
+  _currentStreamId = Math.random().toString(36).slice(2);
+  socket.emit('stream:start', { streamId: _currentStreamId, title, streamUrl, jobId: currentJobId });
 }
 
-playerClose.addEventListener('click', () => {
+function closePlayer() {
   videoEl.pause();
   videoEl.src = '';
   playerOverlay.hidden = true;
   document.body.style.overflow = '';
+  if (_currentStreamId) { socket.emit('stream:end', { streamId: _currentStreamId }); _currentStreamId = null; }
   currentJobId = null;
-});
+}
+
+playerClose.addEventListener('click', closePlayer);
 
 // ── Library polling ────────────────────────────────────────────────────────
 function startLibraryPolling() {
@@ -912,10 +919,7 @@ function setupSearch() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (!playerOverlay.hidden) {
-        videoEl.pause(); videoEl.src = '';
-        playerOverlay.hidden = true; document.body.style.overflow = ''; return;
-      }
+      if (!playerOverlay.hidden) { closePlayer(); return; }
       if (!fetchOverlay.hidden) {
         stopCountdown(); fetchOverlay.hidden = true;
         document.body.style.overflow = ''; return;

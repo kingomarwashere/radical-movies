@@ -213,33 +213,50 @@ export async function addTorrent(source, savePath) {
   }
 
   if (text.includes('Fails') || text.includes('fail')) {
-    console.warn(`[seedbox] add returned "${text}" — checking for duplicate`);
+    console.warn(`[seedbox] add returned "${text}" — stale duplicate detected, forcing re-download`);
 
-    // 1. Check if it landed at the expected save path anyway
-    const hashByPath = await getHashBySavePath(jobId, 3000);
-    if (hashByPath) { console.log(`[seedbox] duplicate at new path: ${hashByPath}`); return hashByPath; }
-
-    // 2. For magnet links, find the existing torrent by infohash
-    if (magnetHash) {
-      const res  = await qbt(`/torrents/info?hashes=${magnetHash}`);
-      const list = await res.json();
-      if (list[0]) {
-        console.log(`[seedbox] found duplicate magnet torrent: ${magnetHash} at ${list[0].save_path}`);
-        return magnetHash;
-      }
+    // Find the existing hash so we can delete it
+    let staleHash = magnetHash || null;
+    if (!staleHash) {
+      const hp = await getHashBySavePath(jobId, 3000);
+      staleHash = hp;
+    }
+    if (!staleHash && Buffer.isBuffer(source)) {
+      staleHash = extractInfoHash(source);
+    }
+    if (!staleHash) {
+      // Last resort: find any torrent with a path overlapping this jobId
+      const listRes = await qbt('/torrents/info');
+      const all = await listRes.json();
+      const found = all.find(t => (t.save_path || '').includes(jobId) || (t.content_path || '').includes(jobId));
+      staleHash = found?.hash || null;
     }
 
-    // 3. Extract infohash from the buffer and find any orphaned torrent
-    if (Buffer.isBuffer(source)) {
-      const knownHash = extractInfoHash(source);
-      if (knownHash) {
-        const res  = await qbt(`/torrents/info?hashes=${knownHash}`);
-        const list = await res.json();
-        if (list[0]) {
-          console.log(`[seedbox] found orphaned torrent by infohash: ${knownHash} at ${list[0].save_path}`);
-          return knownHash;
-        }
+    if (staleHash) {
+      // Delete the stale entry (keep files=false so we don't wipe anything still in use)
+      // then re-add with the current jobId's save path for a guaranteed fresh download
+      console.log(`[seedbox] deleting stale torrent ${staleHash} and re-adding for fresh download`);
+      await deleteTorrent(staleHash, false).catch(e => console.warn('[seedbox] stale delete failed:', e.message));
+      await sleep(2000);
+
+      const form2 = new FormData();
+      if (Buffer.isBuffer(source)) {
+        form2.append('torrents', new Blob([source], { type: 'application/x-bittorrent' }), 'movie.torrent');
+      } else if (magnetHash) {
+        form2.append('urls', source);
+      } else {
+        throw new Error('Cannot re-add: source is a URL and magnet is unknown');
       }
+      form2.append('savepath', savePath || SAVE_PATH);
+      form2.append('category', 'radical-movies');
+      const res2 = await qbt('/torrents/add', { method: 'POST', body: form2 });
+      const text2 = await res2.text();
+      if (text2 === 'Ok.') {
+        console.log('[seedbox] re-add successful after stale duplicate removal');
+        if (magnetHash) return magnetHash;
+        return getHashBySavePath(jobId);
+      }
+      throw new Error(`Re-add after stale duplicate failed: ${text2}`);
     }
 
     throw new Error(`Add torrent failed: ${text}`);

@@ -439,6 +439,31 @@ io.on('connection', (socket) => {
     socket.join('admin');
     socket.emit('admin:stats', await buildAdminStats());
   });
+
+  // R2 streams are served directly from CF — track them via client events
+  socket.on('stream:start', ({ streamId, title, streamUrl, jobId }) => {
+    const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      ?? socket.handshake.address ?? '?';
+    activeStreams.set(streamId, {
+      id: streamId, jobId, title, ip,
+      startedAt: Date.now(), bytesSent: 0, size: 0,
+      _socketId: socket.id,
+    });
+    broadcastAdmin();
+  });
+
+  socket.on('stream:end', ({ streamId }) => {
+    activeStreams.delete(streamId);
+    broadcastAdmin();
+  });
+
+  socket.on('disconnect', () => {
+    // Clean up any streams belonging to this socket
+    for (const [id, s] of activeStreams) {
+      if (s._socketId === socket.id) { activeStreams.delete(id); }
+    }
+    broadcastAdmin();
+  });
 });
 
 // ── Admin helpers ──────────────────────────────────────────────────────────

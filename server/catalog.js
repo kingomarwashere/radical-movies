@@ -86,7 +86,11 @@ function makeMovieTask(movie, source) {
     const existing = findCatalogJob(tmdbId, 'movie');
     if (existing) {
       if (existing.status === 'error') {
-        _jobs.delete(existing.id); // delete and retry
+        // Don't retry failed catalog items within 7 days — they're either not released yet
+        // or not on any tracker. Retrying every sync just floods the admin with noise.
+        const age = Date.now() - (existing.createdAt || 0);
+        if (age < 7 * 24 * 60 * 60 * 1000) return;
+        _jobs.delete(existing.id);
       } else {
         return; // in progress or ready
       }
@@ -139,6 +143,8 @@ function makeTVTask(show) {
     const existing = findCatalogJob(tmdbId, 'tv', 1, 1);
     if (existing) {
       if (existing.status === 'error') {
+        const age = Date.now() - (existing.createdAt || 0);
+        if (age < 7 * 24 * 60 * 60 * 1000) return;
         _jobs.delete(existing.id);
       } else {
         return;
