@@ -84,14 +84,15 @@ async function qbtLogin() {
       const text = await res.text();
       if (text === 'Ok.') {
         console.log('[seedbox] qBittorrent authenticated');
-        _qbtCooldownUntil = 0; // clear any cooldown on success
+        _qbtCooldownUntil = 0;
         return;
       }
-      if (res.status === 502 || text.includes('Bad Gateway')) {
-        console.warn(`[seedbox] qBit 502 (attempt ${attempt + 1}/${delays.length})`);
+      const snippet = text.replace(/\s+/g, ' ').slice(0, 80);
+      console.warn(`[seedbox] qBit login HTTP ${res.status}: "${snippet}" (attempt ${attempt + 1}/${delays.length})`);
+      if (res.status === 502 || res.status === 503 || text.includes('Bad Gateway') || text.includes('Service Unavailable')) {
         continue; // retry
       }
-      throw new Error(`qBittorrent login failed: ${text}`);
+      throw new Error(`qBittorrent login failed: ${text.slice(0, 200)}`);
     }
     // All retries exhausted — impose 5-min cooldown so we stop hammering the endpoint
     _qbtCooldownUntil = Date.now() + 5 * 60_000;
