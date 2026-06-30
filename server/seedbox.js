@@ -75,6 +75,7 @@ async function qbtLogin() {
         headers: {
           'Authorization': `Basic ${BASIC}`,
           'Content-Type': 'application/x-www-form-urlencoded',
+          'Connection': 'close', // force fresh TCP connection — avoid stale keep-alive being blocked
         },
         body: `username=${QB_USER}&password=${QB_PASS}`,
       });
