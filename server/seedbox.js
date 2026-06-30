@@ -56,19 +56,36 @@ async function qbtLogin() {
   if (_loginPromise) return _loginPromise;
 
   _loginPromise = (async () => {
-    const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${BASIC}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: `username=${QB_USER}&password=${QB_PASS}`,
-    });
-    const setCookie = res.headers.get('set-cookie');
-    if (setCookie) _cookie = setCookie.split(';')[0];
-    const text = await res.text();
-    if (text !== 'Ok.') throw new Error(`qBittorrent login failed: ${text}`);
-    console.log('[seedbox] qBittorrent authenticated');
+    // Retry up to 4 times with backoff — nginx rate-limits rapid login bursts with 502
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) {
+        const wait = attempt * 5000;
+        console.log(`[seedbox] login retry ${attempt} in ${wait / 1000}s…`);
+        await new Promise(r => setTimeout(r, wait));
+      }
+      const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${BASIC}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `username=${QB_USER}&password=${QB_PASS}`,
+      });
+      const setCookie = res.headers.get('set-cookie');
+      if (setCookie) _cookie = setCookie.split(';')[0];
+      const text = await res.text();
+      if (text === 'Ok.') {
+        console.log('[seedbox] qBittorrent authenticated');
+        return;
+      }
+      // 502 from nginx rate-limiter — back off and retry
+      if (res.status === 502 || text.includes('502') || text.includes('Bad Gateway')) {
+        console.warn(`[seedbox] qBit login 502 (attempt ${attempt + 1}), backing off…`);
+        continue;
+      }
+      throw new Error(`qBittorrent login failed: ${text}`);
+    }
+    throw new Error('qBittorrent login failed after 4 retries (502 rate limit)');
   })().finally(() => { _loginPromise = null; });
 
   return _loginPromise;
