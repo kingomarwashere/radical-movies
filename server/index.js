@@ -150,6 +150,10 @@ app.get('/api/movies/genre/:id', wrap((req) => tmdb.getByGenre(req.params.id, re
 app.get('/api/movies/search', wrap((req) => tmdb.search(req.query.q, req.query.page)));
 app.get('/api/movies/:id', wrap((req) => tmdb.getMovie(req.params.id)));
 
+// ── People ─────────────────────────────────────────────────────────────────
+app.get('/api/people/search', wrap((req) => tmdb.searchPerson(req.query.q)));
+app.get('/api/people/:id/credits', wrap((req) => tmdb.getPersonCredits(req.params.id)));
+
 // ── TV TMDB routes ─────────────────────────────────────────────────────────
 app.get('/api/tv/trending', wrap(() => tmdb.getTVTrending()));
 app.get('/api/tv/popular', wrap((req) => tmdb.getTVPopular(req.query.page)));

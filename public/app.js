@@ -925,6 +925,11 @@ function setupSearch() {
     showCurrentRows();
   });
 
+  $('filmographyBack').addEventListener('click', () => {
+    $('searchFilmography').hidden = true;
+    $('searchNormal').hidden = false;
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!playerOverlay.hidden) {
@@ -945,16 +950,26 @@ async function doSearch(q) {
   searchResults.hidden = false;
   heroEl.hidden = true;
   rows.hidden = true; tvRows.hidden = true; librarySection.hidden = true;
-  searchGrid.innerHTML = '<p style="color:#555;padding:8px 0">Searching…</p>';
-  const tvGrid = $('searchTVGrid');
-  tvGrid.innerHTML = '';
 
-  const [moviesRes, tvRes] = await Promise.allSettled([
+  // Show normal results, hide filmography drilldown
+  $('searchNormal').hidden = false;
+  $('searchFilmography').hidden = true;
+
+  searchGrid.innerHTML = '<p style="color:#555;padding:8px 0">Searching…</p>';
+  const tvGrid      = $('searchTVGrid');
+  const peopleGrid  = $('searchPeopleGrid');
+  const peopleSection = $('searchPeopleSection');
+  tvGrid.innerHTML  = '';
+  peopleGrid.innerHTML = '';
+  peopleSection.hidden = true;
+
+  const [moviesRes, tvRes, peopleRes] = await Promise.allSettled([
     tmdb('/search/movie', { query: q }),
-    tmdb('/search/tv', { query: q }),
+    tmdb('/search/tv',    { query: q }),
+    fetch(`/api/people/search?q=${encodeURIComponent(q)}`).then(r => r.json()),
   ]);
 
-  // Movies section
+  // Movies
   const movies = moviesRes.status === 'fulfilled' ? (moviesRes.value.results ?? []) : [];
   searchGrid.innerHTML = '';
   if (movies.length) {
@@ -963,13 +978,77 @@ async function doSearch(q) {
     searchGrid.innerHTML = '<p style="color:#555;padding:8px 0">No movies found.</p>';
   }
 
-  // TV section
+  // TV
   const shows = tvRes.status === 'fulfilled' ? (tvRes.value.results ?? []) : [];
   if (shows.length) {
     for (const s of shows.slice(0, 20)) tvGrid.appendChild(createCard(s, 'tv'));
   } else {
     tvGrid.innerHTML = '<p style="color:#555;padding:8px 0">No TV shows found.</p>';
   }
+
+  // People
+  const people = peopleRes.status === 'fulfilled' ? (peopleRes.value.results ?? []) : [];
+  if (people.length) {
+    for (const p of people.slice(0, 12)) peopleGrid.appendChild(createActorCard(p));
+    peopleSection.hidden = false;
+  }
+}
+
+function createActorCard(person) {
+  const card = document.createElement('div');
+  card.className = 'actor-card';
+  const photo = person.profile_path
+    ? `${IMG}/w185${person.profile_path}`
+    : `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Crect width='80' height='80' rx='40' fill='%231a1a1a'/%3E%3Ctext x='40' y='48' text-anchor='middle' font-size='32' fill='%23444'%3E👤%3C/text%3E%3C/svg%3E`;
+  const knownFor = (person.known_for ?? [])
+    .map(k => k.title || k.name).filter(Boolean).slice(0, 2).join(', ');
+  card.innerHTML = `
+    <img class="actor-photo" src="${photo}" alt="${escHtml(person.name)}">
+    <div class="actor-name">${escHtml(person.name)}</div>
+    <div class="actor-dept">${escHtml(person.known_for_department || '')}</div>
+    ${knownFor ? `<div class="actor-known">${escHtml(knownFor)}</div>` : ''}
+  `;
+  card.addEventListener('click', () => openFilmography(person.id, person.name));
+  return card;
+}
+
+async function openFilmography(personId, personName) {
+  $('searchNormal').hidden = true;
+  $('searchFilmography').hidden = false;
+  $('filmographyName').textContent = personName;
+  $('filmographyMoviesGrid').innerHTML = '<p style="color:#555;padding:8px 0">Loading…</p>';
+  $('filmographyTVGrid').innerHTML = '';
+
+  const data = await fetch(`/api/people/${personId}/credits`).then(r => r.json()).catch(() => ({}));
+  const cast = data.cast ?? [];
+
+  const movies = cast
+    .filter(c => c.media_type === 'movie' && c.poster_path)
+    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
+    .filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i) // dedupe
+    .slice(0, 40);
+
+  const shows = cast
+    .filter(c => c.media_type === 'tv' && c.poster_path)
+    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
+    .filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+    .slice(0, 20);
+
+  $('filmographyMoviesGrid').innerHTML = '';
+  if (movies.length) {
+    for (const m of movies) $('filmographyMoviesGrid').appendChild(createCard(m, 'movie'));
+  } else {
+    $('filmographyMoviesGrid').innerHTML = '<p style="color:#555;padding:8px 0">No movies found.</p>';
+  }
+
+  $('filmographyTVGrid').innerHTML = '';
+  if (shows.length) {
+    for (const s of shows) $('filmographyTVGrid').appendChild(createCard(s, 'tv'));
+  } else {
+    $('filmographyTVGrid').innerHTML = '<p style="color:#555;padding:8px 0">No TV shows found.</p>';
+  }
+
+  updateCardBadges();
 }
 
 function showCurrentRows() {

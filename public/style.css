@@ -1023,3 +1023,63 @@ button { cursor: pointer; font-family: var(--font); }
     padding: 0 3px;
   }
 }
+
+/* ── Actor cards ──────────────────────────────────────────────────────────── */
+.actor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px;
+}
+.actor-card {
+  cursor: pointer;
+  text-align: center;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background .15s;
+}
+.actor-card:hover { background: #1a1a1a; }
+.actor-photo {
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  margin: 0 auto 8px;
+  background: #1a1a1a;
+}
+.actor-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e5e5e5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.actor-dept {
+  font-size: 10px;
+  color: #666;
+  margin-top: 2px;
+}
+.actor-known {
+  font-size: 10px;
+  color: #555;
+  margin-top: 3px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Filmography view breadcrumb */
+.filmography-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #888;
+  cursor: pointer;
+  margin-bottom: 16px;
+  padding: 6px 0;
+  transition: color .15s;
+}
+.filmography-back:hover { color: #e5e5e5; }

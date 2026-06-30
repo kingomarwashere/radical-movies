@@ -61,14 +61,37 @@
 
     <!-- Search Results (hidden by default) -->
     <section class="search-results" id="searchResults" hidden>
-      <div id="searchMoviesSection">
-        <h2 class="row-title">Movies</h2>
-        <div class="grid" id="searchGrid"></div>
+
+      <!-- Normal search results -->
+      <div id="searchNormal">
+        <div id="searchMoviesSection">
+          <h2 class="row-title">Movies</h2>
+          <div class="grid" id="searchGrid"></div>
+        </div>
+        <div id="searchTVSection" style="margin-top:32px">
+          <h2 class="row-title">TV Shows</h2>
+          <div class="grid" id="searchTVGrid"></div>
+        </div>
+        <div id="searchPeopleSection" style="margin-top:32px" hidden>
+          <h2 class="row-title">People</h2>
+          <div class="actor-grid" id="searchPeopleGrid"></div>
+        </div>
       </div>
-      <div id="searchTVSection" style="margin-top:32px">
-        <h2 class="row-title">TV Shows</h2>
-        <div class="grid" id="searchTVGrid"></div>
+
+      <!-- Filmography drilldown (shown when actor clicked) -->
+      <div id="searchFilmography" hidden>
+        <div class="filmography-back" id="filmographyBack">← Back to results</div>
+        <div id="filmographyName" style="font-size:20px;font-weight:700;margin-bottom:20px"></div>
+        <div id="filmographyMoviesSection">
+          <h2 class="row-title">Movies</h2>
+          <div class="grid" id="filmographyMoviesGrid"></div>
+        </div>
+        <div id="filmographyTVSection" style="margin-top:32px">
+          <h2 class="row-title">TV Shows</h2>
+          <div class="grid" id="filmographyTVGrid"></div>
+        </div>
       </div>
+
     </section>
 
     <!-- Library Section -->

@@ -35,3 +35,6 @@ export const searchTV = (query, page = 1) => get('/search/tv', { query, page });
 export const getTVShow = (id) => get(`/tv/${id}`, { append_to_response: 'credits,videos,similar' });
 export const getTVSeason = (id, season) => get(`/tv/${id}/season/${season}`);
 export const getTVExternalIds = (id) => get(`/tv/${id}/external_ids`);
+
+export const searchPerson     = (query, page = 1) => get('/search/person', { query, page });
+export const getPersonCredits = (id) => get(`/person/${id}/combined_credits`);
