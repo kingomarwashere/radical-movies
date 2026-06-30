@@ -89,7 +89,7 @@ async function qbtLogin() {
               'Content-Length': Buffer.byteLength(body),
               'Connection': 'close',
             },
-            agent: false, // disable keep-alive / connection pooling for this request
+            agent: new https.Agent({ keepAlive: false, maxCachedSessions: 0 }), // fresh TLS + no pooling
           }, (r) => {
             const cookies = r.headers['set-cookie'] || [];
             const sid = cookies.map(c => c.split(';')[0]).find(c => c.startsWith('SID='));
