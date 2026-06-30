@@ -973,7 +973,7 @@ export function ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r
   //   the entire file before starting playback (1–2 min stall on large files).
   // Phase 2 — read the temp file and upload to R2 in sequential 64 MB chunks.
   const py = `
-import sys, json, subprocess, os
+import sys, json, subprocess, os, threading
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
@@ -993,17 +993,63 @@ def api(action, extra='', method='GET', data=None, ct=None):
     with urlopen(Request(url, data=data, method=method, headers=hdrs), timeout=120) as r:
         return json.loads(r.read())
 
-# Phase 1: ffmpeg reads FILE (seekable) → TMPOUT with faststart
-# -movflags +faststart on file output: ffmpeg does a two-pass internally to place
-# moov at the very start with the correct total duration.
-sys.stdout.write(json.dumps({'phase': 'remux'}) + '\\n'); sys.stdout.flush()
-ret = subprocess.run(
-    ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
-    ['-map', '0:v:0', '-map', '0:a:0', '-movflags', '+faststart', '-y', TMPOUT],
-    capture_output=True
+# Get duration so we can report % progress during encode
+probe = subprocess.run(
+    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+     '-of', 'default=noprint_wrappers=1:nokey=1', FILE],
+    capture_output=True, text=True, timeout=30
 )
-if ret.returncode != 0:
-    sys.stdout.write(json.dumps({'error': 'ffmpeg: ' + ret.stderr.decode(errors='replace')[-400:]}) + '\\n')
+try:
+    total_secs = float(probe.stdout.strip())
+except:
+    total_secs = 0
+
+# Phase 1: ffmpeg reads FILE → TMPOUT with faststart.
+# -progress pipe:2 streams structured progress to stderr every 3 s.
+# A reader thread parses out_time_ms and emits encode_pct (0-49%) to stdout.
+sys.stdout.write(json.dumps({'phase': 'remux'}) + '\\n'); sys.stdout.flush()
+
+last_pct = [0]
+stderr_buf = []
+
+proc = subprocess.Popen(
+    ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
+    ['-map', '0:v:0', '-map', '0:a:0', '-movflags', '+faststart',
+     '-progress', 'pipe:2', '-stats_period', '3', '-y', TMPOUT],
+    stderr=subprocess.PIPE
+)
+
+def read_progress():
+    buf = b''
+    while True:
+        chunk = proc.stderr.read(512)
+        if not chunk:
+            break
+        buf += chunk
+        lines = buf.split(b'\\n')
+        buf = lines[-1]
+        for line in lines[:-1]:
+            txt = line.decode('utf-8', errors='replace').strip()
+            stderr_buf.append(txt)
+            if txt.startswith('out_time_ms=') and total_secs > 0:
+                try:
+                    ms = int(txt.split('=')[1])
+                    pct = min(48, int(ms / 1e6 / total_secs * 49))
+                    if pct > last_pct[0]:
+                        last_pct[0] = pct
+                        sys.stdout.write(json.dumps({'encode_pct': pct}) + '\\n')
+                        sys.stdout.flush()
+                except:
+                    pass
+
+t = threading.Thread(target=read_progress, daemon=True)
+t.start()
+proc.wait()
+t.join(timeout=5)
+
+if proc.returncode != 0:
+    err = '\\n'.join(stderr_buf[-20:])
+    sys.stdout.write(json.dumps({'error': 'ffmpeg: ' + err[-400:]}) + '\\n')
     if os.path.exists(TMPOUT): os.unlink(TMPOUT)
     sys.exit(1)
 
@@ -1055,6 +1101,7 @@ finally:
               const msg = JSON.parse(line);
               if (msg.error) return reject(new Error(`Seedbox ffmpeg: ${msg.error}`));
               if (msg.phase === 'remux') onProgress?.(0);
+              if (msg.encode_pct !== undefined) onProgress?.(msg.encode_pct); // 0-48% during encode
               if (msg.remuxed) onProgress?.(50);
               if (msg.bytes !== undefined) {
                 const total = msg.total || fileSize;
