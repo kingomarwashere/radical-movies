@@ -244,6 +244,9 @@ function renderJobs(jobs) {
     const streamBtn = isDone && j.streamUrl
       ? `<a href="${j.streamUrl}" target="_blank" class="btn btn-ghost btn-sm">▶ Play</a>`
       : '';
+    const retryBtn = isErr
+      ? `<button class="btn btn-ghost btn-sm" style="color:var(--yellow)" data-retry="${j.id}">↺ Retry</button>`
+      : '';
 
     const subMsg = j.status === 'error'
       ? (j.error || j.message || '').slice(0, 80)
@@ -287,6 +290,7 @@ function renderJobs(jobs) {
       <td><span class="mono ${j.readyAt ? 'green' : 'muted'}">${upTime}</span></td>
       <td style="display:flex;gap:6px;align-items:center">
         ${streamBtn}
+        ${retryBtn}
         <button class="btn btn-ghost btn-sm" data-delete="${j.id}">✕</button>
       </td>
     </tr>`;
@@ -466,10 +470,18 @@ document.getElementById('btnDeleteSelected')?.addEventListener('click', async ()
   appendLog(`[LOG] Deleted ${ids.length} jobs`);
 });
 
-// Per-row delete + checkbox change
-document.getElementById('jobsTbody').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-delete]');
-  if (btn) deleteJob(btn.dataset.delete);
+// Per-row delete + retry + checkbox change
+document.getElementById('jobsTbody').addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-delete]');
+  if (del) { deleteJob(del.dataset.delete); return; }
+
+  const retry = e.target.closest('[data-retry]');
+  if (retry) {
+    retry.textContent = '…';
+    retry.disabled = true;
+    await fetch(`/api/admin/job/${retry.dataset.retry}/retry`, { method: 'POST' });
+    appendLog(`[LOG] Retrying job ${retry.dataset.retry}`);
+  }
 });
 document.getElementById('jobsTbody').addEventListener('change', (e) => {
   if (e.target.classList.contains('job-chk')) updateSelectionUI();

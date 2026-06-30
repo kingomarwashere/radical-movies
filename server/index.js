@@ -330,12 +330,49 @@ app.delete('/api/admin/job/:jobId', (req, res) => {
   const id = req.params.jobId;
   const job = jobs.get(id);
   if (!job) return res.status(404).json({ error: 'not found' });
-  // Clean up local file if present
   if (job.localPath && fs.existsSync(job.localPath)) fs.unlink(job.localPath, () => {});
   jobs.delete(id);
   saveJobs();
   broadcastAdmin();
   res.json({ ok: true });
+});
+
+app.post('/api/admin/job/:jobId/retry', async (req, res) => {
+  const old = jobs.get(req.params.jobId);
+  if (!old) return res.status(404).json({ error: 'not found' });
+  if (old.status !== 'error') return res.status(400).json({ error: 'only errored jobs can be retried' });
+
+  // Remove old entry so dedup check won't match it
+  if (old.localPath && fs.existsSync(old.localPath)) fs.unlink(old.localPath, () => {});
+  jobs.delete(old.id);
+
+  const jobId = randomUUID();
+  jobs.set(jobId, {
+    id: jobId,
+    tmdbId:    old.tmdbId,
+    title:     old.title,
+    year:      old.year,
+    type:      old.type || 'movie',
+    season:    old.season,
+    episode:   old.episode,
+    showTitle: old.showTitle,
+    user:      old.user,
+    ip:        old.ip,
+    status: 'searching', progress: 0,
+    speed: null, eta: null,
+    message: 'Retry: searching for torrent…',
+    streamUrl: null, localPath: null, error: null,
+    createdAt: Date.now(),
+  });
+  saveJobs();
+
+  runPipeline(jobId).catch(err => {
+    const j = jobs.get(jobId);
+    if (j) { j.status = 'error'; j.error = err.message; j.message = `Error: ${err.message}`; saveJobs(); }
+    broadcastAdmin();
+  });
+
+  res.json({ ok: true, jobId });
 });
 
 // SSE log tail — streams the last 100 lines then follows live
