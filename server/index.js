@@ -77,7 +77,13 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
+app.get('/admin', (req, res) => {
+  let html = fs.readFileSync(path.join(PUBLIC_DIR, 'admin.html'), 'utf8');
+  html = html.replace(/\b(admin\.js)\b/g, `$1?v=${BUILD_ID}`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
+});
 
 // In-memory stores
 const jobs          = new Map(); // jobId → job
