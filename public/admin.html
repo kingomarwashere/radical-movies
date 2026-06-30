@@ -62,6 +62,31 @@
     .btn-red   { background: var(--red); color: #fff; }
     .btn-sm { padding: 4px 10px; font-size: 11px; }
 
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 0 24px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      background: none; border: none; color: var(--muted);
+      padding: 10px 18px; font-size: 12px; font-weight: 600;
+      font-family: 'Roboto Mono', monospace;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+      letter-spacing: .04em;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--red); }
+    .tab-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--red); color: #fff; border-radius: 9999px;
+      font-size: 10px; min-width: 16px; height: 16px; padding: 0 4px;
+      margin-left: 6px; vertical-align: middle;
+    }
+
     /* ── Stat cards ── */
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; padding: 20px 24px 0; }
     .stat-card {
@@ -153,12 +178,37 @@
 
     .empty { color: var(--muted); padding: 20px 0; text-align: center; font-size: 12px; }
 
-    /* Server info bar */
+    /* ── Users tab ── */
+    .user-row-streaming td { background: rgba(34,197,94,.04); }
+    .user-ip-pill {
+      display: inline-block;
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 3px; padding: 1px 6px;
+      font-size: 10px; font-family: var(--mono); color: var(--muted);
+      margin: 1px 2px;
+    }
+    .user-now {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--green); font-weight: 600;
+    }
+    .user-now .now-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0;
+      animation: pulse .8s ease-in-out infinite;
+    }
+    .user-now .now-ip { color: var(--muted); font-weight: 400; margin-left: 2px; }
+    .user-requests { font-size: 11px; color: #888; }
+    .user-requests .req-item { display: block; line-height: 1.7; }
+    .req-title { color: var(--text); }
+    .req-status { font-size: 10px; }
+
+    /* System bar */
     .sysbar {
       display: flex; gap: 20px; flex-wrap: wrap;
       padding: 10px 24px;
       background: var(--bg2); border-top: 1px solid var(--border);
       font-size: 11px; color: var(--muted); font-family: var(--mono);
+      position: sticky; bottom: 0;
     }
     .sysbar span { display: flex; align-items: center; gap: 5px; }
     .sysbar .dot { width: 6px; height: 6px; border-radius: 50%; }
@@ -185,85 +235,128 @@
   </div>
 </div>
 
-<!-- Stats -->
-<div class="stats" id="statsCards">
-  <div class="stat-card">
-    <div class="stat-label">Active Downloads</div>
-    <div class="stat-value yellow" id="statActive">—</div>
-    <div class="stat-sub" id="statActiveSpeed"></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Ready / Total Jobs</div>
-    <div class="stat-value green" id="statReady">—</div>
-    <div class="stat-sub" id="statTotal"></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Active Streams</div>
-    <div class="stat-value blue" id="statStreams">—</div>
-    <div class="stat-sub" id="statStreamDetail"></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Disk Free</div>
-    <div class="stat-value orange" id="statDisk">—</div>
-    <div class="stat-sub" id="statDiskSub"></div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Memory</div>
-    <div class="stat-value" id="statMem">—</div>
-    <div class="stat-sub" id="statUptime"></div>
-  </div>
+<!-- Tab bar -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="users">Users<span class="tab-badge" id="usersBadge" hidden>0</span></button>
+  <button class="tab-btn" data-tab="jobs">Jobs</button>
+  <button class="tab-btn" data-tab="log">Log</button>
 </div>
 
-<!-- Active Streams -->
-<div class="section">
-  <div class="section-header">
-    <div class="section-title">Active Streams</div>
-  </div>
-  <div class="streams-grid" id="streamsGrid">
-    <div class="empty">No active streams</div>
-  </div>
-</div>
+<!-- ═══════════ TAB: OVERVIEW ═══════════ -->
+<div id="tab-overview">
 
-<hr class="divider">
+  <!-- Stats -->
+  <div class="stats" id="statsCards">
+    <div class="stat-card">
+      <div class="stat-label">Active Downloads</div>
+      <div class="stat-value yellow" id="statActive">—</div>
+      <div class="stat-sub" id="statActiveSpeed"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Ready / Total Jobs</div>
+      <div class="stat-value green" id="statReady">—</div>
+      <div class="stat-sub" id="statTotal"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Streams</div>
+      <div class="stat-value blue" id="statStreams">—</div>
+      <div class="stat-sub" id="statStreamDetail"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Disk Free</div>
+      <div class="stat-value orange" id="statDisk">—</div>
+      <div class="stat-sub" id="statDiskSub"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Memory</div>
+      <div class="stat-value" id="statMem">—</div>
+      <div class="stat-sub" id="statUptime"></div>
+    </div>
+  </div>
 
-<!-- Jobs -->
-<div class="section">
-  <div class="section-header">
-    <div class="section-title">Jobs</div>
+  <!-- Active Streams -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Active Streams</div>
+    </div>
+    <div class="streams-grid" id="streamsGrid">
+      <div class="empty">No active streams</div>
+    </div>
   </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Title</th>
-          <th>Status</th>
-          <th>Progress</th>
-          <th>Quality</th>
-          <th>Size</th>
-          <th>R2 Storage</th>
-          <th>Speed</th>
-          <th>Age</th>
-          <th>↓ DL</th>
-          <th>↑ UP</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="jobsTbody">
-        <tr><td colspan="8" class="empty">No jobs yet</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
 
-<!-- Log tail -->
-<hr class="divider">
-<div class="section">
-  <div class="section-header">
-    <div class="section-title">Server Log</div>
-    <button class="btn btn-ghost btn-sm" id="btnClearLog">Clear</button>
+</div><!-- /tab-overview -->
+
+<!-- ═══════════ TAB: USERS ═══════════ -->
+<div id="tab-users" hidden>
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Users</div>
+      <span class="muted" style="font-size:11px">All requests &amp; activity by account</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>IP(s)</th>
+            <th>Watching Now</th>
+            <th>Active</th>
+            <th>Ready / Total</th>
+            <th>Recent Requests</th>
+            <th>Last Active</th>
+          </tr>
+        </thead>
+        <tbody id="usersTbody">
+          <tr><td colspan="7" class="empty">No users yet</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
-  <pre id="logBox" style="background:#050505;border:1px solid #222;border-radius:4px;padding:12px 14px;font-family:'Roboto Mono',monospace;font-size:11px;color:#aaa;height:220px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;">[connecting…]</pre>
-</div>
+</div><!-- /tab-users -->
+
+<!-- ═══════════ TAB: JOBS ═══════════ -->
+<div id="tab-jobs" hidden>
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Jobs</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>User</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Quality</th>
+            <th>Size</th>
+            <th>R2</th>
+            <th>Speed</th>
+            <th>Age</th>
+            <th>↓ DL</th>
+            <th>↑ UP</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="jobsTbody">
+          <tr><td colspan="12" class="empty">No jobs yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- /tab-jobs -->
+
+<!-- ═══════════ TAB: LOG ═══════════ -->
+<div id="tab-log" hidden>
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Server Log</div>
+      <button class="btn btn-ghost btn-sm" id="btnClearLog">Clear</button>
+    </div>
+    <pre id="logBox" style="background:#050505;border:1px solid #222;border-radius:4px;padding:12px 14px;font-family:'Roboto Mono',monospace;font-size:11px;color:#aaa;height:calc(100vh - 200px);overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-all;">[connecting…]</pre>
+  </div>
+</div><!-- /tab-log -->
 
 <!-- System bar -->
 <div class="sysbar" id="sysbar">

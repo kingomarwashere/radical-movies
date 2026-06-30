@@ -17,12 +17,31 @@ async function fetchR2Objects() {
   } catch {}
 }
 fetchR2Objects();
-setInterval(fetchR2Objects, 60000); // refresh every minute
+setInterval(fetchR2Objects, 60000);
 
-// ── Render ─────────────────────────────────────────────────────────────────
+// ── Tabs ────────────────────────────────────────────────────────────────────
+const tabBtns  = document.querySelectorAll('.tab-btn');
+const tabPanes = {
+  overview: document.getElementById('tab-overview'),
+  users:    document.getElementById('tab-users'),
+  jobs:     document.getElementById('tab-jobs'),
+  log:      document.getElementById('tab-log'),
+};
+
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+    Object.entries(tabPanes).forEach(([key, pane]) => {
+      pane.hidden = key !== btn.dataset.tab;
+    });
+  });
+});
+
+// ── Render ──────────────────────────────────────────────────────────────────
 function render({ jobs, streams, disk, server }) {
   renderStats(jobs, streams, disk, server);
   renderStreams(streams);
+  renderUsers(jobs, streams);
   renderJobs(jobs);
   renderSysbar(server);
 }
@@ -32,6 +51,16 @@ function renderStats(jobs, streams, disk, server) {
   const ready   = jobs.filter(j => j.status === 'ready');
   const dlJobs  = jobs.filter(j => j.status === 'downloading');
   const speed   = dlJobs.map(j => j.speed).filter(Boolean).join(' · ') || '';
+
+  // Update users badge
+  const humanUsers = new Set(jobs.filter(j => j.user && j.user !== 'system').map(j => j.user));
+  const badge = document.getElementById('usersBadge');
+  if (humanUsers.size > 0) {
+    badge.textContent = humanUsers.size;
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
 
   document.getElementById('statActive').textContent      = active.length;
   document.getElementById('statActiveSpeed').textContent = speed;
@@ -57,9 +86,9 @@ function renderStreams(streams) {
     return;
   }
   grid.innerHTML = streams.map(s => {
-    const pct   = s.size ? Math.round(s.bytesSent / s.size * 100) : 0;
-    const dur   = Math.floor((Date.now() - s.startedAt) / 1000);
-    const mbSent = (s.bytesSent / 1e6).toFixed(0);
+    const pct     = s.size ? Math.round(s.bytesSent / s.size * 100) : 0;
+    const dur     = Math.floor((Date.now() - s.startedAt) / 1000);
+    const mbSent  = (s.bytesSent / 1e6).toFixed(0);
     const mbTotal = (s.size / 1e6).toFixed(0);
     return `
       <div class="stream-card">
@@ -79,18 +108,113 @@ function renderStreams(streams) {
   }).join('');
 }
 
-function fmtDuration(ms) {
-  if (!ms || ms < 0) return '—';
-  const s = Math.floor(ms / 1000);
-  if (s < 60)  return `${s}s`;
-  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
-  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+// ── Users ────────────────────────────────────────────────────────────────────
+function renderUsers(jobs, streams) {
+  const tbody = document.getElementById('usersTbody');
+
+  // Build per-user aggregates (exclude system catalog jobs)
+  const userMap = new Map();
+
+  for (const j of jobs) {
+    const u = j.user || 'anonymous';
+    if (u === 'system') continue; // catalog jobs in separate section below
+    if (!userMap.has(u)) userMap.set(u, {
+      username: u,
+      ips: new Set(),
+      allJobs: [],
+      activeJobs: [],
+      readyJobs: [],
+      lastActive: 0,
+      streams: [],
+    });
+    const ud = userMap.get(u);
+    ud.allJobs.push(j);
+    if (j.ip) ud.ips.add(j.ip);
+    if (['searching','downloading','uploading','processing'].includes(j.status)) ud.activeJobs.push(j);
+    if (j.status === 'ready') ud.readyJobs.push(j);
+    if ((j.createdAt || 0) > ud.lastActive) ud.lastActive = j.createdAt || 0;
+  }
+
+  // Attach streams to users via jobId → job.user
+  for (const s of streams) {
+    const job = jobs.find(j => j.id === s.jobId);
+    const u   = job?.user || 'anonymous';
+    if (u === 'system') continue;
+    if (!userMap.has(u)) userMap.set(u, {
+      username: u, ips: new Set(), allJobs: [], activeJobs: [], readyJobs: [], lastActive: 0, streams: [],
+    });
+    userMap.get(u).streams.push({ ...s, streamIp: s.ip });
+  }
+
+  if (!userMap.size) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No users yet</td></tr>';
+    return;
+  }
+
+  const users = [...userMap.values()].sort((a, b) => b.lastActive - a.lastActive);
+
+  tbody.innerHTML = users.map(u => {
+    const ipsHtml = [...u.ips].map(ip => `<span class="user-ip-pill">${esc(ip)}</span>`).join('') || '<span class="muted">—</span>';
+
+    const nowHtml = u.streams.length
+      ? u.streams.map(s => `
+          <div class="user-now">
+            <span class="now-dot"></span>
+            <span>${esc(s.title)}</span>
+            <span class="now-ip">${esc(s.streamIp)}</span>
+          </div>`).join('')
+      : '<span class="muted">—</span>';
+
+    const activeHtml = u.activeJobs.length
+      ? u.activeJobs.map(j => {
+          const statusColor = j.status === 'downloading' ? 'var(--yellow)' : j.status === 'uploading' ? 'var(--blue)' : '#888';
+          const pct = j.progress ? ` ${j.progress}%` : '';
+          return `<span class="user-requests req-item"><span class="req-title">${esc(shortTitle(j))}</span> <span class="req-status" style="color:${statusColor}">${j.status}${pct}</span></span>`;
+        }).join('')
+      : '<span class="muted">—</span>';
+
+    // Show 3 most recent requests
+    const recent = [...u.allJobs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 3);
+    const recentHtml = recent.map(j => {
+      const statusColor = j.status === 'ready' ? 'var(--green)' : j.status === 'error' ? 'var(--red)' : '#888';
+      return `<span class="user-requests req-item"><span class="req-title">${esc(shortTitle(j))}</span> <span class="req-status" style="color:${statusColor}">${j.status}</span></span>`;
+    }).join('');
+
+    const rowClass = u.streams.length ? 'user-row-streaming' : '';
+
+    return `<tr class="${rowClass}">
+      <td><strong>${esc(u.username)}</strong></td>
+      <td>${ipsHtml}</td>
+      <td>${nowHtml}</td>
+      <td>${activeHtml}</td>
+      <td class="mono">${u.readyJobs.length} / ${u.allJobs.length}</td>
+      <td>${recentHtml}</td>
+      <td class="mono muted">${u.lastActive ? timeAgo(u.lastActive) : '—'}</td>
+    </tr>`;
+  }).join('');
 }
 
+function shortTitle(j) {
+  const t = j.showTitle || j.title || '';
+  const ep = j.season && j.episode
+    ? ` S${String(j.season).padStart(2,'0')}E${String(j.episode).padStart(2,'0')}`
+    : '';
+  return (t + ep).slice(0, 40);
+}
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60)   return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+// ── Jobs ─────────────────────────────────────────────────────────────────────
 function renderJobs(jobs) {
   const tbody = document.getElementById('jobsTbody');
   if (!jobs.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="empty">No jobs yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="empty">No jobs yet</td></tr>';
     return;
   }
   tbody.innerHTML = jobs.map(j => {
@@ -113,10 +237,9 @@ function renderJobs(jobs) {
       ? (j.error || j.message || '').slice(0, 80)
       : (j.message || '').slice(0, 60);
 
-    const dlTime  = j.downloadedAt ? fmtDuration(j.downloadedAt - j.createdAt)   : '—';
-    const upTime  = j.readyAt && j.downloadedAt ? fmtDuration(j.readyAt - j.downloadedAt) : '—';
+    const dlTime = j.downloadedAt ? fmtDuration(j.downloadedAt - j.createdAt)   : '—';
+    const upTime = j.readyAt && j.downloadedAt ? fmtDuration(j.readyAt - j.downloadedAt) : '—';
 
-    // R2 storage status
     let r2Cell = '<span class="muted mono">—</span>';
     if (j.r2Key) {
       const r2obj = r2Objects.get(j.r2Key);
@@ -130,11 +253,16 @@ function renderJobs(jobs) {
       r2Cell = `<span class="green mono">✓ ready</span>`;
     }
 
+    const userLabel = j.user === 'system'
+      ? '<span class="muted" style="font-size:10px">catalog</span>'
+      : `<span style="color:#aaa">${esc(j.user || '—')}</span>`;
+
     return `<tr>
       <td>
         <div class="title-cell">${esc(j.title)}</div>
         <div class="title-year">${j.year || ''}${subMsg ? ' · <span style="color:' + (j.status==='error'?'var(--red)':'#888') + '">' + esc(subMsg) + '</span>' : ''}</div>
       </td>
+      <td>${userLabel}</td>
       <td><span class="badge badge-${j.status}">${j.status}</span></td>
       <td>${prog}</td>
       <td><span class="mono">${j.quality || '—'}</span></td>
@@ -158,7 +286,7 @@ function renderSysbar(server) {
   document.getElementById('sysUptime').textContent = `uptime: ${fmtUptime(server.uptime)} · mem: ${server.memUsed} MB`;
 }
 
-// ── Log tail ───────────────────────────────────────────────────────────────
+// ── Log tail ────────────────────────────────────────────────────────────────
 const logBox = document.getElementById('logBox');
 const MAX_LOG_LINES = 200;
 let logLines = [];
@@ -181,11 +309,15 @@ function clearLog() { logLines = []; logBox.innerHTML = ''; }
 function connectLogStream() {
   const es = new EventSource('/api/admin/logs');
   es.onmessage = (e) => appendLog(e.data);
-  es.onerror   = () => { appendLog('[WARN] log stream disconnected — reconnecting…'); setTimeout(connectLogStream, 3000); es.close(); };
+  es.onerror   = () => {
+    appendLog('[WARN] log stream disconnected — reconnecting…');
+    setTimeout(connectLogStream, 3000);
+    es.close();
+  };
 }
 connectLogStream();
 
-// ── Actions ────────────────────────────────────────────────────────────────
+// ── Actions ──────────────────────────────────────────────────────────────────
 async function deleteJob(id) {
   await fetch(`/api/admin/job/${id}`, { method: 'DELETE' });
 }
@@ -199,20 +331,26 @@ async function cleanupDisk() {
   appendLog('[LOG] manual disk cleanup triggered');
 }
 
-// Wire up header buttons and log clear (module scope — can't use inline onclick)
 document.getElementById('btnClearDone')?.addEventListener('click', clearCompleted);
 document.getElementById('btnCleanDisk')?.addEventListener('click', cleanupDisk);
 document.getElementById('btnClearLog')?.addEventListener('click', clearLog);
 
-// Event delegation for per-row delete buttons
 document.getElementById('jobsTbody').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-delete]');
   if (btn) deleteJob(btn.dataset.delete);
 });
 
-// ── Util ───────────────────────────────────────────────────────────────────
+// ── Util ─────────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
   if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
+function fmtDuration(ms) {
+  if (!ms || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60)  return `${s}s`;
   if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
   return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
 }

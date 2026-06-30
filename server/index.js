@@ -143,7 +143,7 @@ app.get('/api/library', (req, res) => {
   const user = req.username;
   const list = [...jobs.values()]
     .filter(j => !j.user || j.user === user) // show user's own jobs + legacy jobs with no user
-    .map(j => ({ id: j.id, type: j.type, title: j.title, showTitle: j.showTitle, season: j.season, episode: j.episode, status: j.status, progress: j.progress, message: j.message, streamUrl: j.streamUrl, quality: j.quality, tmdbId: j.tmdbId, createdAt: j.createdAt, error: j.error }))
+    .map(j => ({ id: j.id, type: j.type, title: j.title, showTitle: j.showTitle, season: j.season, episode: j.episode, status: j.status, progress: j.progress, message: j.message, streamUrl: j.streamUrl, quality: j.quality, tmdbId: j.tmdbId, createdAt: j.createdAt, error: j.error, ip: j.ip }))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   res.json(list);
 });
@@ -191,10 +191,14 @@ app.post('/api/watch', async (req, res) => {
   }
 
   const jobId = randomUUID();
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+    ?? req.socket.remoteAddress
+    ?? 'unknown';
   jobs.set(jobId, {
     id: jobId, tmdbId, title, year,
     type: type || 'movie', season, episode, showTitle,
     user: req.username,
+    ip: clientIp,
     status: 'searching', progress: 0,
     speed: null, eta: null, message: 'Searching for torrent…',
     streamUrl: null, localPath: null, error: null,
