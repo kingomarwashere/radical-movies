@@ -364,6 +364,56 @@ function renderSysbar(server) {
   document.getElementById('sysUptime').textContent = `uptime: ${fmtUptime(server.uptime)} · mem: ${server.memUsed} MB`;
 }
 
+// ── Accounts ─────────────────────────────────────────────────────────────────
+async function fetchAccounts() {
+  try {
+    const users = await fetch('/api/admin/users').then(r => r.json());
+    const tbody = document.getElementById('accountsTbody');
+    if (!users.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No accounts</td></tr>'; return; }
+    tbody.innerHTML = users.map(u => `<tr>
+      <td><strong>${esc(u.username)}</strong></td>
+      <td><span class="mono" style="color:#aaa">${esc(u.password)}</span></td>
+      <td class="mono muted">${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}</td>
+      <td><button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-user="${esc(u.username)}">✕</button></td>
+    </tr>`).join('');
+  } catch {}
+}
+fetchAccounts();
+
+document.getElementById('accountsTbody').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-del-user]');
+  if (!btn) return;
+  const username = btn.dataset.delUser;
+  await fetch(`/api/admin/user/${encodeURIComponent(username)}`, { method: 'DELETE' });
+  fetchAccounts();
+});
+
+document.getElementById('btnAddUser')?.addEventListener('click', () => {
+  const form = document.getElementById('addUserForm');
+  form.hidden = !form.hidden;
+  form.style.display = form.hidden ? '' : 'flex';
+});
+
+document.getElementById('btnCreateUser')?.addEventListener('click', async () => {
+  const username = document.getElementById('newUsername').value.trim();
+  const password = document.getElementById('newPassword').value.trim();
+  if (!username || !password) return;
+  const res = await fetch('/api/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (res.ok) {
+    document.getElementById('newUsername').value = '';
+    document.getElementById('newPassword').value = '';
+    document.getElementById('addUserForm').hidden = true;
+    fetchAccounts();
+  } else {
+    const d = await res.json();
+    appendLog(`[ERR] Create user failed: ${d.error}`);
+  }
+});
+
 // ── Log tail ────────────────────────────────────────────────────────────────
 const logBox = document.getElementById('logBox');
 const MAX_LOG_LINES = 200;

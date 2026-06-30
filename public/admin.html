@@ -4,6 +4,35 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Radical Movies — Admin</title>
+  <script>
+    // Password gate — runs before anything else loads
+    (function() {
+      if (localStorage.getItem('adminKey') === 'potato') return;
+      document.addEventListener('DOMContentLoaded', function() {
+        const gate = document.createElement('div');
+        gate.id = 'adminGate';
+        gate.style.cssText = 'position:fixed;inset:0;background:#0a0a0a;z-index:9999;display:flex;align-items:center;justify-content:center;font-family:Roboto Mono,monospace';
+        gate.innerHTML = `<div style="text-align:center;width:300px">
+          <div style="font-size:20px;font-weight:800;color:#ff0099;letter-spacing:3px;margin-bottom:24px">ADMIN</div>
+          <input id="gateInput" type="password" placeholder="password" autocomplete="off"
+            style="width:100%;padding:10px 14px;background:#111;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:14px;border-radius:4px;outline:none;margin-bottom:12px">
+          <div id="gateErr" style="color:#ff0099;font-size:12px;min-height:16px;margin-bottom:8px"></div>
+          <button id="gateBtn" style="width:100%;padding:10px;background:#ff0099;color:#fff;border:none;font-family:inherit;font-size:13px;font-weight:700;border-radius:4px;cursor:pointer">Enter</button>
+        </div>`;
+        document.body.appendChild(gate);
+        function tryPass() {
+          if (document.getElementById('gateInput').value === 'potato') {
+            localStorage.setItem('adminKey', 'potato');
+            gate.remove();
+          } else {
+            document.getElementById('gateErr').textContent = 'Wrong password';
+          }
+        }
+        document.getElementById('gateBtn').addEventListener('click', tryPass);
+        document.getElementById('gateInput').addEventListener('keydown', e => { if (e.key === 'Enter') tryPass(); });
+      });
+    })();
+  </script>
   <link rel="icon" type="image/jpeg" href="/favicon.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -370,6 +399,24 @@
         <tbody id="usersTbody">
           <tr><td colspan="7" class="empty">No users yet</td></tr>
         </tbody>
+      </table>
+    </div>
+  </div>
+  <!-- Accounts section -->
+  <div class="section" style="margin-top:8px">
+    <div class="section-header">
+      <div class="section-title">Accounts</div>
+      <button class="btn btn-ghost btn-sm" id="btnAddUser">+ Add User</button>
+    </div>
+    <div id="addUserForm" hidden style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+      <input id="newUsername" placeholder="username" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+      <input id="newPassword" placeholder="password" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+      <button class="btn btn-ghost btn-sm" id="btnCreateUser">Create</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Username</th><th>Password</th><th>Created</th><th></th></tr></thead>
+        <tbody id="accountsTbody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>

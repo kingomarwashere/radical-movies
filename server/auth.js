@@ -21,19 +21,27 @@ function saveUsers(users) {
   try { fs.writeFileSync(USERS_FILE, JSON.stringify(users)); } catch {}
 }
 
-// ── Password hashing ──────────────────────────────────────────────────────
-function hashPassword(password) {
-  const salt = randomBytes(16).toString('hex');
-  const hash = scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
+// Passwords stored as plaintext. Legacy hashed passwords (salt:hex format) are
+// still accepted on login and migrated to plaintext on next successful login.
+function hashPassword(password) { return password; }
 
 function verifyPassword(password, stored) {
+  if (password === stored) return true;
+  // Migration path: try old scrypt hash
   try {
-    const [salt, hash] = stored.split(':');
-    const derived = scryptSync(password, salt, 64);
-    return timingSafeEqual(derived, Buffer.from(hash, 'hex'));
-  } catch { return false; }
+    const parts = stored.split(':');
+    if (parts.length === 2 && parts[0].length === 32) {
+      const derived = scryptSync(password, parts[0], 64);
+      return timingSafeEqual(derived, Buffer.from(parts[1], 'hex'));
+    }
+  } catch {}
+  return false;
+}
+
+export function getUsers()           { return loadUsers(); }
+export function deleteUser(username) {
+  const users = loadUsers().filter(u => u.username !== username);
+  saveUsers(users);
 }
 
 // ── Session store (persisted to disk) ────────────────────────────────────
@@ -168,6 +176,13 @@ export function authRoutes(app) {
 
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Migrate hashed password to plaintext on login
+    if (user.password !== password) {
+      const users = loadUsers();
+      const u = users.find(x => x.username === user.username);
+      if (u) { u.password = password; saveUsers(users); }
     }
 
     const token = createSession(user.username);

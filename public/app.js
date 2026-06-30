@@ -22,7 +22,6 @@ let heroMovies = [];
 let heroIdx = 0;
 let heroTimer = null;
 let currentJobId = null;
-let countdownInterval = null;
 let socket = null;
 let currentSection = 'home'; // 'home' | 'tv' | 'library'
 let loggedInUser = null;
@@ -76,8 +75,6 @@ const tvModalSimilar = $('tvModalSimilar');
 const fetchOverlay   = $('fetchOverlay');
 const fetchClose     = $('fetchClose');
 const fetchTitle     = $('fetchTitle');
-const ringFill       = $('ringFill');
-const countdownTime  = $('countdownTime');
 const fetchStatus    = $('fetchStatus');
 const progressWrap   = $('progressWrap');
 const progressFill   = $('progressFill');
@@ -108,8 +105,7 @@ function initSocket() {
 
   socket.on('job:error', ({ jobId, error }) => {
     if (jobId !== currentJobId) return;
-    stopCountdown();
-    fetchOverlay.hidden = true;
+        fetchOverlay.hidden = true;
     toast(`Error: ${error}`);
   });
 }
@@ -204,8 +200,26 @@ function renderHero(m) {
     m.original_language ? `<span>${m.original_language.toUpperCase()}</span>` : '',
   ].filter(Boolean).join('');
   heroDesc.textContent = m.overview || '';
-  heroWatch.onclick = () => startWatch(m);
-  heroInfo.onclick  = () => openModal(m.id);
+  const heroCatalog = catalogData.find(c => c.tmdbId === m.id && c.type === 'movie');
+  const heroLib     = libraryData.find(j => j.tmdbId === m.id && j.type === 'movie' && j.status !== 'error');
+  const heroReady   = heroCatalog?.streamUrl || (heroLib?.status === 'ready' && heroLib?.streamUrl);
+  const heroStream  = heroCatalog?.streamUrl || heroLib?.streamUrl;
+  const heroTitle2  = m.title || m.name || '';
+
+  if (heroReady) {
+    heroWatch.textContent = '▶  Watch Now';
+    heroWatch.disabled    = false;
+    heroWatch.onclick     = () => openPlayer(heroStream, heroTitle2);
+  } else if (heroLib) {
+    heroWatch.textContent = '✓ In Library';
+    heroWatch.disabled    = true;
+    heroWatch.onclick     = null;
+  } else {
+    heroWatch.textContent = '+ Add to Library';
+    heroWatch.disabled    = false;
+    heroWatch.onclick     = () => queueWatch(m);
+  }
+  heroInfo.onclick = () => openModal(m.id);
 }
 
 function startHeroRotation() {
@@ -527,7 +541,6 @@ async function startWatch(movie) {
   setFetchStatus('Initialising…');
   progressWrap.hidden = true;
   progressFill.style.width = '0%';
-  startCountdown(360);
 
   try {
     const res = await fetch('/api/watch', {
@@ -538,7 +551,7 @@ async function startWatch(movie) {
     const data = await res.json();
     if (!res.ok) {
       toast(data.error || 'Failed to queue');
-      stopCountdown(); fetchOverlay.hidden = true;
+      fetchOverlay.hidden = true;
       document.body.style.overflow = '';
       return;
     }
@@ -547,7 +560,7 @@ async function startWatch(movie) {
     if (ready && streamUrl) { openPlayer(streamUrl, title); return; }
     socket.emit('watch:join', jobId);
   } catch {
-    stopCountdown(); fetchOverlay.hidden = true;
+    fetchOverlay.hidden = true;
     document.body.style.overflow = '';
     toast('Failed to start download');
   }
@@ -631,44 +644,10 @@ async function queueEpisode(showTitle, showYear, showId, season, episode, epTitl
 }
 
 fetchClose.addEventListener('click', () => {
-  stopCountdown();
-  fetchOverlay.hidden = true;
+    fetchOverlay.hidden = true;
   document.body.style.overflow = '';
   currentJobId = null;
 });
-
-// ── Countdown ──────────────────────────────────────────────────────────────
-const CIRCUMFERENCE = 2 * Math.PI * 54;
-
-function startCountdown(seconds) {
-  stopCountdown();
-  let remaining = seconds;
-  ringFill.style.strokeDashoffset = '0';
-  updateCountdownDisplay(remaining, seconds);
-
-  countdownInterval = setInterval(() => {
-    remaining--;
-    if (remaining <= 0) {
-      remaining = 0;
-      clearInterval(countdownInterval);
-      setFetchStatus('Still working… please wait a moment longer.');
-    }
-    updateCountdownDisplay(remaining, seconds);
-  }, 1000);
-}
-
-function stopCountdown() {
-  clearInterval(countdownInterval);
-  countdownInterval = null;
-}
-
-function updateCountdownDisplay(remaining, total) {
-  const mins = Math.floor(remaining / 60);
-  const secs = remaining % 60;
-  countdownTime.textContent = `${mins}:${String(secs).padStart(2, '0')}`;
-  const pct = remaining / total;
-  ringFill.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - pct));
-}
 
 function setFetchStatus(msg) { fetchStatus.textContent = msg; }
 
@@ -696,8 +675,7 @@ function fmtEta(seconds) {
 
 // ── Player ─────────────────────────────────────────────────────────────────
 function openPlayer(streamUrl, title) {
-  stopCountdown();
-  fetchOverlay.hidden = true;
+    fetchOverlay.hidden = true;
   document.body.style.overflow = 'hidden';
   playerTitle.textContent = title || '';
   videoEl.src = streamUrl;
@@ -727,6 +705,8 @@ async function fetchLibrary() {
     updateLibraryBadge();
     updateCardBadges();
     if (currentSection === 'library') renderLibraryGrid();
+    // Re-render hero so Watch Now / Add to Library stays in sync with library state
+    if (heroMovies.length) renderHero(heroMovies[heroIdx]);
   } catch {}
 }
 

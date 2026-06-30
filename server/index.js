@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { spawn } from 'child_process';
 
-import { authRoutes, requireAuth } from './auth.js';
+import { authRoutes, requireAuth, getUsers, deleteUser } from './auth.js';
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB, searchTPBEpisode } from './piratebay.js';
@@ -324,6 +324,8 @@ app.get('/api/stream/:jobId', (req, res) => {
 
 // ── Admin API ──────────────────────────────────────────────────────────────
 app.get('/api/admin/stats', async (req, res) => res.json(await buildAdminStats()));
+app.get('/api/admin/users', (req, res) => res.json(getUsers().map(u => ({ username: u.username, password: u.password, createdAt: u.createdAt }))));
+app.delete('/api/admin/user/:username', (req, res) => { deleteUser(req.params.username); res.json({ ok: true }); });
 app.get('/api/admin/r2', async (req, res) => res.json(await listR2Objects()));
 
 app.delete('/api/admin/job/:jobId', (req, res) => {
