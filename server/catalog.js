@@ -221,7 +221,7 @@ export async function syncCatalog() {
       ...shows.map(s => makeTVTask(s)),
     ];
 
-    await pLimit(tasks, 5);
+    await pLimit(tasks, 3);
     console.log('[catalog] sync complete');
   } catch (e) {
     console.error('[catalog] sync failed:', e.message);

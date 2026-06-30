@@ -49,21 +49,29 @@ const BASIC = Buffer.from(`${QB_USER}:${QB_PASS}`).toString('base64');
 
 // ── qBittorrent API ─────────────────────────────────────────────────────────
 let _cookie = null;
+let _loginPromise = null; // serialise concurrent login attempts to avoid qBit IP bans
 
 async function qbtLogin() {
-  const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${BASIC}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: `username=${QB_USER}&password=${QB_PASS}`,
-  });
-  const setCookie = res.headers.get('set-cookie');
-  if (setCookie) _cookie = setCookie.split(';')[0];
-  const text = await res.text();
-  if (text !== 'Ok.') throw new Error(`qBittorrent login failed: ${text}`);
-  console.log('[seedbox] qBittorrent authenticated');
+  // If a login is already in progress, wait for it — don't flood qBit with concurrent auths
+  if (_loginPromise) return _loginPromise;
+
+  _loginPromise = (async () => {
+    const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${BASIC}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `username=${QB_USER}&password=${QB_PASS}`,
+    });
+    const setCookie = res.headers.get('set-cookie');
+    if (setCookie) _cookie = setCookie.split(';')[0];
+    const text = await res.text();
+    if (text !== 'Ok.') throw new Error(`qBittorrent login failed: ${text}`);
+    console.log('[seedbox] qBittorrent authenticated');
+  })().finally(() => { _loginPromise = null; });
+
+  return _loginPromise;
 }
 
 async function qbt(path, opts = {}) {
