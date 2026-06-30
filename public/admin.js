@@ -334,6 +334,14 @@ async function cleanupDisk() {
 document.getElementById('btnClearDone')?.addEventListener('click', clearCompleted);
 document.getElementById('btnCleanDisk')?.addEventListener('click', cleanupDisk);
 document.getElementById('btnClearLog')?.addEventListener('click', clearLog);
+document.getElementById('btnCatalogSync')?.addEventListener('click', async () => {
+  await fetch('/api/admin/catalog/sync', { method: 'POST' });
+  appendLog('[LOG] Catalog sync triggered');
+});
+document.getElementById('btnCatalogRetry')?.addEventListener('click', async () => {
+  await fetch('/api/admin/catalog/retry', { method: 'POST' });
+  appendLog('[LOG] Catalog retry (cooldown cleared) triggered');
+});
 
 document.getElementById('jobsTbody').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-delete]');

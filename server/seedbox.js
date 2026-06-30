@@ -44,24 +44,31 @@ const SFTP_PORT   = parseInt(process.env.SEEDBOX_SFTP_PORT || '2100');
 const SAVE_PATH   = process.env.SEEDBOX_SAVE_PATH || '/home/seedit4me/torrents/qbittorrent';
 
 export const seedboxConfigured = !!(process.env.SEEDBOX_QB_URL || QB_URL);
+export function clearQbtCooldown() { _qbtCooldownUntil = 0; console.log('[seedbox] qBit cooldown cleared'); }
 
 const BASIC = Buffer.from(`${QB_USER}:${QB_PASS}`).toString('base64');
 
 // ── qBittorrent API ─────────────────────────────────────────────────────────
 let _cookie = null;
-let _loginPromise = null; // serialise concurrent login attempts to avoid qBit IP bans
+let _loginPromise = null;   // serialise concurrent auth requests
+let _qbtCooldownUntil = 0; // global back-off after repeated 502s
 
 async function qbtLogin() {
-  // If a login is already in progress, wait for it — don't flood qBit with concurrent auths
   if (_loginPromise) return _loginPromise;
 
+  // Hard cooldown — if we've been getting 502s, refuse all logins until it expires
+  const cooldownLeft = _qbtCooldownUntil - Date.now();
+  if (cooldownLeft > 0) {
+    throw new Error(`qBittorrent cooldown: ${Math.ceil(cooldownLeft / 1000)}s remaining`);
+  }
+
   _loginPromise = (async () => {
-    // Retry up to 4 times with backoff — nginx rate-limits rapid login bursts with 502
-    for (let attempt = 0; attempt < 4; attempt++) {
-      if (attempt > 0) {
-        const wait = attempt * 5000;
-        console.log(`[seedbox] login retry ${attempt} in ${wait / 1000}s…`);
-        await new Promise(r => setTimeout(r, wait));
+    // Retry up to 3 times with increasing delays (20s, 40s)
+    const delays = [0, 20_000, 40_000];
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt] > 0) {
+        console.log(`[seedbox] qBit login retry ${attempt} in ${delays[attempt] / 1000}s…`);
+        await new Promise(r => setTimeout(r, delays[attempt]));
       }
       const res = await fetch(`${QB_URL}/api/v2/auth/login`, {
         method: 'POST',
@@ -76,16 +83,19 @@ async function qbtLogin() {
       const text = await res.text();
       if (text === 'Ok.') {
         console.log('[seedbox] qBittorrent authenticated');
+        _qbtCooldownUntil = 0; // clear any cooldown on success
         return;
       }
-      // 502 from nginx rate-limiter — back off and retry
-      if (res.status === 502 || text.includes('502') || text.includes('Bad Gateway')) {
-        console.warn(`[seedbox] qBit login 502 (attempt ${attempt + 1}), backing off…`);
-        continue;
+      if (res.status === 502 || text.includes('Bad Gateway')) {
+        console.warn(`[seedbox] qBit 502 (attempt ${attempt + 1}/${delays.length})`);
+        continue; // retry
       }
       throw new Error(`qBittorrent login failed: ${text}`);
     }
-    throw new Error('qBittorrent login failed after 4 retries (502 rate limit)');
+    // All retries exhausted — impose 5-min cooldown so we stop hammering the endpoint
+    _qbtCooldownUntil = Date.now() + 5 * 60_000;
+    console.error('[seedbox] qBit login failed after retries — 5 min cooldown started');
+    throw new Error('qBittorrent unavailable (502) — cooldown 5 min');
   })().finally(() => { _loginPromise = null; });
 
   return _loginPromise;

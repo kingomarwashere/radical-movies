@@ -20,6 +20,7 @@ import {
   seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
   remuxOnSeedbox, transcodeOnSeedbox, probeRemoteAudioCodec, probeRemoteFileAudio,
+  clearQbtCooldown,
 } from './seedbox.js';
 import { searchEZTV } from './eztv.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
@@ -136,6 +137,12 @@ app.get('/api/catalog/stats', (req, res) => res.json(getCatalogStats()));
 app.post('/api/admin/catalog/sync', (req, res) => {
   syncCatalog().catch(e => console.error('[catalog] admin sync error:', e.message));
   res.json({ ok: true, message: 'Catalog sync started in background' });
+});
+
+app.post('/api/admin/catalog/retry', (req, res) => {
+  clearQbtCooldown();
+  syncCatalog().catch(e => console.error('[catalog] retry sync error:', e.message));
+  res.json({ ok: true, message: 'Cooldown cleared, catalog retry started' });
 });
 
 // ── Library ────────────────────────────────────────────────────────────────
