@@ -903,8 +903,15 @@ export async function probeRemoteAudioCodec(remotePath) {
 export function ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key, codecArgs, onProgress) {
   const CHUNK = 64 * 1024 * 1024;
 
+  // Two-phase approach on the seedbox:
+  // Phase 1 — ffmpeg reads from the LOCAL file (seekable) → writes to a temp file with
+  //   -movflags +faststart.  Because both input and output are seekable files, ffmpeg can
+  //   compute the real duration and place moov at byte 0 with correct duration metadata.
+  //   Pipe output with empty_moov always produces duration=0, causing browsers to buffer
+  //   the entire file before starting playback (1–2 min stall on large files).
+  // Phase 2 — read the temp file and upload to R2 in sequential 64 MB chunks.
   const py = `
-import sys, json, subprocess
+import sys, json, subprocess, os
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
@@ -915,6 +922,7 @@ BASE   = ${JSON.stringify(r2UploadUrl)}
 SECRET = ${JSON.stringify(r2Secret)}
 CHUNK  = ${CHUNK}
 CODEC  = ${JSON.stringify(codecArgs)}
+TMPOUT = '/tmp/radical-web-' + str(os.getpid()) + '.mp4'
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
@@ -923,37 +931,45 @@ def api(action, extra='', method='GET', data=None, ct=None):
     with urlopen(Request(url, data=data, method=method, headers=hdrs), timeout=120) as r:
         return json.loads(r.read())
 
-uid = api('create', '&contentType=' + MIME, 'POST')['uploadId']
-sys.stdout.write(json.dumps({'started': True}) + '\\n'); sys.stdout.flush()
-
-ff = subprocess.Popen(
+# Phase 1: ffmpeg reads FILE (seekable) → TMPOUT with faststart
+# -movflags +faststart on file output: ffmpeg does a two-pass internally to place
+# moov at the very start with the correct total duration.
+sys.stdout.write(json.dumps({'phase': 'remux'}) + '\\n'); sys.stdout.flush()
+ret = subprocess.run(
     ['ffmpeg', '-loglevel', 'error', '-i', FILE] + CODEC +
-    ['-map', '0:v:0', '-map', '0:a:0',
-     '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 'pipe:1'],
-    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    ['-map', '0:v:0', '-map', '0:a:0', '-movflags', '+faststart', '-y', TMPOUT],
+    capture_output=True
 )
+if ret.returncode != 0:
+    sys.stdout.write(json.dumps({'error': 'ffmpeg: ' + ret.stderr.decode(errors='replace')[-400:]}) + '\\n')
+    if os.path.exists(TMPOUT): os.unlink(TMPOUT)
+    sys.exit(1)
 
+out_size = os.path.getsize(TMPOUT)
+sys.stdout.write(json.dumps({'remuxed': True, 'size': out_size}) + '\\n'); sys.stdout.flush()
+
+# Phase 2: upload TMPOUT to R2
+uid = api('create', '&contentType=' + MIME, 'POST')['uploadId']
 parts = []; pn = 0; done_bytes = 0
 try:
-    while True:
-        chunk = ff.stdout.read(CHUNK)
-        if not chunk: break
-        pn += 1
-        r = api('part', '&uploadId=' + uid + '&partNumber=' + str(pn), 'PUT', chunk, 'application/octet-stream')
-        parts.append({'partNumber': pn, 'etag': r['etag']})
-        done_bytes += len(chunk)
-        sys.stdout.write(json.dumps({'part': pn, 'bytes': done_bytes}) + '\\n'); sys.stdout.flush()
-    ff.wait()
-    if ff.returncode != 0:
-        raise RuntimeError('ffmpeg exit ' + str(ff.returncode) + ': ' + ff.stderr.read().decode(errors='replace')[-300:])
+    with open(TMPOUT, 'rb') as f:
+        while True:
+            chunk = f.read(CHUNK)
+            if not chunk: break
+            pn += 1
+            r = api('part', '&uploadId=' + uid + '&partNumber=' + str(pn), 'PUT', chunk, 'application/octet-stream')
+            parts.append({'partNumber': pn, 'etag': r['etag']})
+            done_bytes += len(chunk)
+            sys.stdout.write(json.dumps({'part': pn, 'bytes': done_bytes, 'total': out_size}) + '\\n'); sys.stdout.flush()
     api('complete', '&uploadId=' + uid, 'POST', json.dumps({'parts': parts}).encode(), 'application/json')
     sys.stdout.write(json.dumps({'done': True}) + '\\n'); sys.stdout.flush()
 except Exception as e:
-    ff.kill()
     try: api('abort', '&uploadId=' + uid, 'DELETE')
     except: pass
     sys.stdout.write(json.dumps({'error': str(e)}) + '\\n'); sys.stdout.flush()
     sys.exit(1)
+finally:
+    if os.path.exists(TMPOUT): os.unlink(TMPOUT)
 `;
 
   // Base64-encode the script to avoid all shell quoting/newline issues.
@@ -976,7 +992,12 @@ except Exception as e:
             try {
               const msg = JSON.parse(line);
               if (msg.error) return reject(new Error(`Seedbox ffmpeg: ${msg.error}`));
-              if (msg.bytes !== undefined) onProgress?.(Math.min(99, Math.round(msg.bytes / fileSize * 100)));
+              if (msg.phase === 'remux') onProgress?.(0);
+              if (msg.remuxed) onProgress?.(50);
+              if (msg.bytes !== undefined) {
+                const total = msg.total || fileSize;
+                onProgress?.(50 + Math.min(49, Math.round(msg.bytes / total * 50)));
+              }
               if (msg.done) resolve();
             } catch {}
           }
