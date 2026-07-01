@@ -169,6 +169,17 @@ async function qbt(path, opts = {}) {
   return res;
 }
 
+// Safe JSON parse for qBit responses — returns [] when qBit is down (502 HTML page)
+async function qbtJson(path) {
+  try {
+    const res = await qbt(path);
+    if (!res.ok) return [];
+    const text = await res.text();
+    if (!text.trimStart().startsWith('[') && !text.trimStart().startsWith('{')) return [];
+    return JSON.parse(text);
+  } catch { return []; }
+}
+
 // Returns torrent hash so callers can track/delete by hash rather than relying on
 // the search result's hash field (which is null for .torrent file sources like TL).
 export async function addTorrent(source, savePath) {
@@ -226,8 +237,7 @@ export async function addTorrent(source, savePath) {
     }
     if (!staleHash) {
       // Last resort: find any torrent with a path overlapping this jobId
-      const listRes = await qbt('/torrents/info');
-      const all = await listRes.json();
+      const all = await qbtJson('/torrents/info');
       const found = all.find(t => (t.save_path || '').includes(jobId) || (t.content_path || '').includes(jobId));
       staleHash = found?.hash || null;
     }
@@ -268,8 +278,7 @@ export async function addTorrent(source, savePath) {
 async function getHashBySavePath(jobId, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const listRes = await qbt('/torrents/info');
-    const list = await listRes.json();
+    const list = await qbtJson('/torrents/info');
     const found = list.find(t => t.save_path?.includes(jobId));
     if (found) return found.hash;
     await sleep(1000);
@@ -278,8 +287,7 @@ async function getHashBySavePath(jobId, timeoutMs = 10000) {
 }
 
 export async function getTorrentByHash(hash) {
-  const res = await qbt(`/torrents/info?hashes=${hash.toLowerCase()}`);
-  const list = await res.json();
+  const list = await qbtJson(`/torrents/info?hashes=${hash.toLowerCase()}`);
   return list[0] || null;
 }
 
@@ -514,8 +522,7 @@ export async function findVideoFile(jobId, torrentHash) {
 
     let saveDir = getSeedboxSavePath(jobId);
     if (torrentHash) {
-      const res  = await qbt(`/torrents/info?hashes=${torrentHash}`);
-      const list = await res.json();
+      const list = await qbtJson(`/torrents/info?hashes=${torrentHash}`);
       if (list[0]) {
         // content_path = actual root of downloaded files (may be a subdir of save_path)
         // save_path = the configured destination directory
