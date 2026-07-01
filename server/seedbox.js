@@ -1144,7 +1144,7 @@ export function transcodeVideoOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Sec
     : ['-c:a', 'copy'];
   console.log(`[seedbox] transcode video (H.265→H.264)${audioNeedsTranscode ? ' + audio→AAC' : ''}: ${path.basename(remotePath)}`);
   return ffmpegSeedboxToR2(remotePath, fileSize, r2UploadUrl, r2Secret, r2Key,
-    ['-c:v', 'libx264', '-crf', '20', '-preset', 'fast', ...audioArgs], onProgress);
+    ['-c:v', 'libx264', '-crf', '20', '-preset', 'ultrafast', ...audioArgs], onProgress);
 }
 
 // Delete a directory on the seedbox via SSH — used after upload to free disk
