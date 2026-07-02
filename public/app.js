@@ -722,6 +722,9 @@ function openPlayer(streamUrl, title) {
   videoEl.play().catch(() => {});
   _currentStreamId = Math.random().toString(36).slice(2);
   socket.emit('stream:start', { streamId: _currentStreamId, title, streamUrl, jobId: currentJobId });
+  // Hide overlapping UI
+  $('trialBanner').hidden = true;
+  window.Tawk_API?.hideWidget?.();
 }
 
 function closePlayer() {
@@ -732,6 +735,10 @@ function closePlayer() {
   document.body.style.overflow = '';
   if (_currentStreamId) { socket.emit('stream:end', { streamId: _currentStreamId }); _currentStreamId = null; }
   currentJobId = null;
+  // Restore overlapping UI
+  const banner = $('trialBanner');
+  if (banner && document.body.classList.contains('has-trial-banner')) banner.hidden = false;
+  window.Tawk_API?.showWidget?.();
 }
 
 function setupPlayerControls() {
