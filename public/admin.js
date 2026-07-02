@@ -25,6 +25,7 @@ const tabPanes = {
   overview: document.getElementById('tab-overview'),
   users:    document.getElementById('tab-users'),
   jobs:     document.getElementById('tab-jobs'),
+  codes:    document.getElementById('tab-codes'),
   log:      document.getElementById('tab-log'),
 };
 
@@ -34,6 +35,7 @@ tabBtns.forEach(btn => {
     Object.entries(tabPanes).forEach(([key, pane]) => {
       pane.hidden = key !== btn.dataset.tab;
     });
+    if (btn.dataset.tab === 'codes') fetchCodes();
   });
 });
 
@@ -417,6 +419,75 @@ document.getElementById('btnCreateUser')?.addEventListener('click', async () => 
   } else {
     const d = await res.json();
     appendLog(`[ERR] Create user failed: ${d.error}`);
+  }
+});
+
+// ── Invite Codes ─────────────────────────────────────────────────────────────
+async function fetchCodes() {
+  try {
+    const codes = await fetch('/api/admin/invite-codes').then(r => r.json());
+    const tbody = document.getElementById('codesTbody');
+    if (!codes.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No codes yet — click Generate Code to create one</td></tr>'; return; }
+    tbody.innerHTML = codes.map(c => {
+      const used    = !!c.usedBy;
+      const status  = used
+        ? `<span style="color:#22c55e;font-weight:700">✓ Used</span>`
+        : `<span style="color:#f59e0b;font-weight:700">Unused</span>`;
+      const usedBy  = used ? `<span class="mono">${esc(c.usedBy)}</span>` : '—';
+      const created = c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '—';
+      const copyBtn = `<button class="btn btn-ghost btn-sm" data-copy-code="${esc(c.code)}" title="Copy">⎘</button>`;
+      const delBtn  = !used
+        ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-code="${esc(c.code)}" title="Delete">✕</button>`
+        : '';
+      return `<tr>
+        <td><strong class="mono" style="letter-spacing:1px;color:#ff0099">${esc(c.code)}</strong></td>
+        <td class="muted" style="font-size:11px">${esc(c.notes || '—')}</td>
+        <td>${status}</td>
+        <td>${usedBy}</td>
+        <td class="muted mono" style="font-size:11px">${created}</td>
+        <td style="display:flex;gap:4px">${copyBtn}${delBtn}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { appendLog(`[ERR] fetchCodes: ${e.message}`); }
+}
+
+document.getElementById('btnGenCode')?.addEventListener('click', () => {
+  const form = document.getElementById('codeCreateForm');
+  form.hidden = !form.hidden;
+});
+
+document.getElementById('btnCreateCode')?.addEventListener('click', async () => {
+  const code  = document.getElementById('codeInput').value.trim().toUpperCase();
+  const notes = document.getElementById('codeNotes').value.trim();
+  const res = await fetch('/api/admin/invite-codes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code || undefined, notes }),
+  });
+  const data = await res.json();
+  if (res.ok) {
+    appendLog(`[LOG] Invite code created: ${data.code}`);
+    document.getElementById('codeInput').value  = '';
+    document.getElementById('codeNotes').value  = '';
+    document.getElementById('codeCreateForm').hidden = true;
+    fetchCodes();
+  } else {
+    appendLog(`[ERR] Create code failed: ${data.error}`);
+  }
+});
+
+document.getElementById('codesTbody')?.addEventListener('click', async (e) => {
+  const copy = e.target.closest('[data-copy-code]');
+  if (copy) {
+    await navigator.clipboard.writeText(copy.dataset.copyCode).catch(() => {});
+    const orig = copy.textContent;
+    copy.textContent = '✓'; setTimeout(() => { copy.textContent = orig; }, 1200);
+    return;
+  }
+  const del = e.target.closest('[data-del-code]');
+  if (del) {
+    await fetch(`/api/admin/invite-codes/${encodeURIComponent(del.dataset.delCode)}`, { method: 'DELETE' });
+    fetchCodes();
   }
 });
 

@@ -292,6 +292,7 @@
   <button class="tab-btn active" data-tab="overview">Overview</button>
   <button class="tab-btn" data-tab="users">Users<span class="tab-badge" id="usersBadge" hidden>0</span></button>
   <button class="tab-btn" data-tab="jobs">Jobs</button>
+  <button class="tab-btn" data-tab="codes">Invite Codes</button>
   <button class="tab-btn" data-tab="log">Log</button>
 </div>
 
@@ -421,6 +422,27 @@
     </div>
   </div>
 </div><!-- /tab-users -->
+
+<!-- ═══════════ TAB: INVITE CODES ═══════════ -->
+<div id="tab-codes" hidden>
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Invite Codes</div>
+      <button class="btn btn-ghost btn-sm" id="btnGenCode">+ Generate Code</button>
+    </div>
+    <div id="codeCreateForm" style="margin-bottom:16px;display:flex;gap:8px;align-items:center" hidden>
+      <input id="codeInput" placeholder="Custom code (optional)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:200px;letter-spacing:1px;text-transform:uppercase">
+      <input id="codeNotes" placeholder="Note (e.g. John's code)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:200px">
+      <button class="btn btn-ghost btn-sm" id="btnCreateCode">Create</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Code</th><th>Note</th><th>Status</th><th>Used By</th><th>Created</th><th></th></tr></thead>
+        <tbody id="codesTbody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════ TAB: JOBS ═══════════ -->
 <div id="tab-jobs" hidden>
