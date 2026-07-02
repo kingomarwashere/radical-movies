@@ -9,6 +9,7 @@ import {
   findAudioFiles, probeAudioMeta, convertAudioOnSeedbox, extractCoverArtOnSeedbox,
 } from './seedbox.js';
 import { getStreamUrl } from './r2.js';
+import { getUsers, updateUser } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -91,29 +92,34 @@ export async function runMusicPipeline(albumId) {
   }
 
   // Process each audio file
+  // If we have pre-fetched iTunes tracks, use them (more reliable than file tags).
+  // Match by position (audio files are sorted by filename which usually includes track number).
+  const prefetched = album.tracks || [];
   const tracks = [];
+
   for (let i = 0; i < audioFiles.length; i++) {
-    const file = audioFiles[i];
-    patch({ message: `Processing track ${i + 1}/${audioFiles.length}: ${file.name}` });
+    const file   = audioFiles[i];
+    const itunes = prefetched[i] || null;
+    patch({ message: `Processing ${i + 1}/${audioFiles.length}: ${itunes?.title || file.name}` });
 
-    const meta = await probeAudioMeta(file.path);
-    const disc  = meta.disc  || 1;
-    const track = meta.track || (i + 1);
-    const title = meta.title || path.basename(file.name, path.extname(file.name));
-    const slug  = slugify(title);
-    const r2Key = `music/${albumId}/${disc}-${String(track).padStart(2,'0')}-${slug}.mp3`;
+    let disc, track, title, duration;
+    if (itunes) {
+      disc = itunes.disc || 1; track = itunes.n || (i + 1);
+      title = itunes.title; duration = itunes.duration || 0;
+    } else {
+      const meta = await probeAudioMeta(file.path);
+      disc = meta.disc || 1; track = meta.track || (i + 1);
+      title = meta.title || path.basename(file.name, path.extname(file.name));
+      duration = meta.duration || 0;
+    }
 
+    const r2Key = `music/${albumId}/${disc}-${String(track).padStart(2,'0')}-${slugify(title)}.mp3`;
     await convertAudioOnSeedbox(
       file.path, file.size, UPLOAD_URL, UPLOAD_SECRET, r2Key,
-      (pct) => patch({ message: `Track ${i + 1}/${audioFiles.length} — uploading ${pct}%` })
+      (pct) => patch({ message: `Track ${i + 1}/${audioFiles.length} — ${pct}%` })
     );
 
-    tracks.push({
-      n: track, disc, title,
-      duration: meta.duration || 0,
-      url: getStreamUrl(r2Key),
-    });
-
+    tracks.push({ n: track, disc, title, duration, url: getStreamUrl(r2Key) });
     console.log(`[music] ✓ ${disc}-${track} ${title}`);
   }
 
@@ -134,22 +140,27 @@ export async function runMusicPipeline(albumId) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 export function musicRoutes(app, { requireAuth }) {
-  // Public: check if music is enabled
+  // Public: check if this user has music access
   app.get('/api/music/enabled', requireAuth, (req, res) => {
-    res.json({ enabled: getSetting('musicEnabled', false) });
+    const u = getUsers().find(x => x.username === req.username);
+    res.json({ enabled: !!u?.musicEnabled });
   });
 
-  // Public: get catalog (only when enabled)
+  // Public: catalog — only for users with music access
   app.get('/api/music/catalog', requireAuth, (req, res) => {
-    if (!getSetting('musicEnabled', false)) return res.json([]);
+    const u = getUsers().find(x => x.username === req.username);
+    if (!u?.musicEnabled) return res.json([]);
     res.json(loadCatalog().filter(a => a.status === 'ready'));
   });
 
-  // Admin: toggle music on/off
-  app.post('/api/admin/music/toggle', (req, res) => {
-    const val = !getSetting('musicEnabled', false);
-    setSetting('musicEnabled', val);
-    res.json({ enabled: val });
+  // Admin: toggle music for a specific user
+  app.patch('/api/admin/user/:username/music', requireAuth, (req, res) => {
+    const users = getUsers();
+    const u = users.find(x => x.username === req.params.username);
+    if (!u) return res.status(404).json({ error: 'User not found' });
+    const next = !u.musicEnabled;
+    updateUser(req.params.username, { musicEnabled: next });
+    res.json({ ok: true, musicEnabled: next });
   });
 
   // Admin: all albums including pipeline status
@@ -157,22 +168,23 @@ export function musicRoutes(app, { requireAuth }) {
 
   // Admin: add album + kick off pipeline
   app.post('/api/admin/music/album', async (req, res) => {
-    const { artist, album, year, torrentSource, coverUrl } = req.body || {};
+    const { artist, album, year, torrentSource, coverUrl, tracks: prefetchedTracks, itunesId } = req.body || {};
     if (!artist || !album) return res.status(400).json({ error: 'artist and album required' });
 
     const albumId = randomUUID();
     const catalog = loadCatalog();
     catalog.push({
-      id:            albumId,
-      artist:        artist.trim(),
-      album:         album.trim(),
-      year:          year ? parseInt(year) : null,
-      coverUrl:      coverUrl?.trim() || null,
-      torrentSource: torrentSource?.trim() || null,
-      tracks:        [],
-      status:        torrentSource ? 'pending' : 'empty',
-      message:       null,
-      createdAt:     Date.now(),
+      id:              albumId,
+      artist:          artist.trim(),
+      album:           album.trim(),
+      year:            year ? parseInt(year) : null,
+      coverUrl:        coverUrl?.trim() || null,
+      torrentSource:   torrentSource?.trim() || null,
+      tracks:          prefetchedTracks || [],  // iTunes tracks stored immediately
+      itunesId:        itunesId || null,
+      status:          torrentSource ? 'pending' : 'empty',
+      message:         null,
+      createdAt:       Date.now(),
     });
     saveCatalog(catalog);
     res.json({ ok: true, albumId });

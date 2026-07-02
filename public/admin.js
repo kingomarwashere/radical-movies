@@ -379,22 +379,36 @@ async function fetchAccounts() {
   try {
     const users = await fetch('/api/admin/users').then(r => r.json());
     const tbody = document.getElementById('accountsTbody');
-    if (!users.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No accounts</td></tr>'; return; }
-    tbody.innerHTML = users.map(u => `<tr>
-      <td><strong>${esc(u.username)}</strong></td>
-      <td><span class="mono" style="color:#aaa">${esc(u.password)}</span></td>
-      <td class="mono muted">${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}</td>
-      <td><button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-user="${esc(u.username)}">✕</button></td>
-    </tr>`).join('');
+    if (!users.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No accounts</td></tr>'; return; }
+    tbody.innerHTML = users.map(u => {
+      const musicOn = !!u.musicEnabled;
+      return `<tr>
+        <td><strong>${esc(u.username)}</strong></td>
+        <td><span class="mono" style="color:#aaa">${esc(u.password)}</span></td>
+        <td class="mono muted">${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}</td>
+        <td>
+          <button class="btn btn-ghost btn-sm" data-music-user="${esc(u.username)}"
+            style="color:${musicOn ? 'var(--green)' : '#444'};font-size:15px" title="${musicOn ? 'Disable music' : 'Enable music'}">
+            ♪
+          </button>
+        </td>
+        <td><button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-user="${esc(u.username)}">✕</button></td>
+      </tr>`;
+    }).join('');
   } catch {}
 }
 fetchAccounts();
 
 document.getElementById('accountsTbody').addEventListener('click', async (e) => {
+  const musicBtn = e.target.closest('[data-music-user]');
+  if (musicBtn) {
+    await fetch(`/api/admin/user/${encodeURIComponent(musicBtn.dataset.musicUser)}/music`, { method: 'PATCH' });
+    fetchAccounts();
+    return;
+  }
   const btn = e.target.closest('[data-del-user]');
   if (!btn) return;
-  const username = btn.dataset.delUser;
-  await fetch(`/api/admin/user/${encodeURIComponent(username)}`, { method: 'DELETE' });
+  await fetch(`/api/admin/user/${encodeURIComponent(btn.dataset.delUser)}`, { method: 'DELETE' });
   fetchAccounts();
 });
 
@@ -514,62 +528,138 @@ document.getElementById('codesTbody')?.addEventListener('click', async (e) => {
 
 // ── Music Admin ───────────────────────────────────────────────────────────────
 const musicStatusColor = { ready:'var(--green)', downloading:'var(--yellow)', pending:'#888', error:'var(--red)', empty:'#555' };
+let _selectedAlbum = null; // iTunes album currently selected
 
 async function fetchMusicAdmin() {
   try {
-    const [albums, { enabled }] = await Promise.all([
-      fetch('/api/admin/music/albums').then(r => r.json()),
-      fetch('/api/music/enabled').then(r => r.json()),
-    ]);
-    const label = document.getElementById('musicEnabledLabel');
-    if (label) {
-      label.textContent = enabled ? '● Enabled for users' : '○ Disabled';
-      label.style.color = enabled ? 'var(--green)' : '#555';
-    }
-    const tbody = document.getElementById('musicAlbumsTbody');
+    const albums = await fetch('/api/admin/music/albums').then(r => r.json());
+    const tbody  = document.getElementById('musicAlbumsTbody');
     if (!tbody) return;
-    if (!albums.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No albums — add one above</td></tr>'; return; }
+    if (!albums.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No albums yet — search above to add one</td></tr>'; return; }
     tbody.innerHTML = albums.map(a => {
-      const statusColor = musicStatusColor[a.status] || '#888';
+      const col    = musicStatusColor[a.status] || '#888';
       const tracks = a.tracks?.length || 0;
-      const retryBtn = a.status === 'error'
-        ? `<button class="btn btn-ghost btn-sm" data-music-retry="${esc(a.id)}" style="color:var(--yellow)">↺</button>` : '';
-      const delBtn = `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-music-del="${esc(a.id)}">✕</button>`;
+      const retry  = a.status === 'error' ? `<button class="btn btn-ghost btn-sm" data-music-retry="${esc(a.id)}" style="color:var(--yellow)">↺</button>` : '';
       return `<tr>
         <td>${esc(a.artist)}</td>
         <td>${esc(a.album)}</td>
         <td class="muted" style="font-size:11px">${a.year || '—'}</td>
         <td class="muted" style="font-size:11px">${tracks || '—'}</td>
         <td>
-          <span style="color:${statusColor};font-size:12px;font-weight:700">${a.status}</span>
+          <span style="color:${col};font-size:12px;font-weight:700">${a.status}</span>
           ${a.message ? `<div class="muted" style="font-size:10px;margin-top:2px">${esc(a.message.slice(0,80))}</div>` : ''}
         </td>
-        <td style="display:flex;gap:4px">${retryBtn}${delBtn}</td>
+        <td style="display:flex;gap:4px">
+          ${retry}
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" data-music-del="${esc(a.id)}">✕</button>
+        </td>
       </tr>`;
     }).join('');
   } catch (e) { appendLog(`[ERR] fetchMusicAdmin: ${e.message}`); }
 }
 
-document.getElementById('btnMusicToggle')?.addEventListener('click', async () => {
-  await fetch('/api/admin/music/toggle', { method: 'POST' });
-  fetchMusicAdmin();
+// ── iTunes search ─────────────────────────────────────────────────────────────
+async function itunesSearch(q) {
+  const url = `https://itunes.apple.com/search?${new URLSearchParams({ term: q, media: 'music', entity: 'album', limit: 24 })}`;
+  const res  = await fetch(url);
+  return (await res.json()).results || [];
+}
+
+async function itunesTracks(collectionId) {
+  const url = `https://itunes.apple.com/lookup?${new URLSearchParams({ id: collectionId, entity: 'song', limit: 100 })}`;
+  const res  = await fetch(url);
+  const results = (await res.json()).results || [];
+  return results
+    .filter(r => r.wrapperType === 'track')
+    .sort((a, b) => (a.discNumber - b.discNumber) || (a.trackNumber - b.trackNumber))
+    .map(r => ({
+      n:        r.trackNumber,
+      disc:     r.discNumber || 1,
+      title:    r.trackName,
+      duration: Math.round((r.trackTimeMillis || 0) / 1000),
+    }));
+}
+
+function renderItunesResults(albums) {
+  const grid = document.getElementById('musicSearchResults');
+  if (!albums.length) { grid.innerHTML = '<div class="muted" style="font-size:12px;padding:8px 0">No results found.</div>'; return; }
+  grid.innerHTML = '';
+  albums.forEach(a => {
+    const art  = (a.artworkUrl100 || '').replace('100x100', '600x600');
+    const year = a.releaseDate ? new Date(a.releaseDate).getFullYear() : '';
+    const card = document.createElement('div');
+    card.style.cssText = 'cursor:pointer;border-radius:6px;overflow:hidden;background:#111;transition:transform .15s';
+    card.onmouseenter = () => card.style.transform = 'translateY(-2px)';
+    card.onmouseleave = () => card.style.transform = '';
+    card.innerHTML = `
+      <img src="${art}" style="width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#1a1a1a">
+      <div style="padding:7px 8px">
+        <div style="font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.collectionName)}</div>
+        <div style="font-size:10px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.artistName)}</div>
+        ${year ? `<div style="font-size:10px;color:#444">${year}</div>` : ''}
+      </div>`;
+    card.addEventListener('click', () => selectItunesAlbum(a, art));
+    grid.appendChild(card);
+  });
+}
+
+async function selectItunesAlbum(album, artUrl) {
+  const panel  = document.getElementById('musicSelectedPanel');
+  const artEl  = document.getElementById('selectedAlbumArt');
+  const nameEl = document.getElementById('selectedAlbumName');
+  const artistEl = document.getElementById('selectedAlbumArtist');
+  const metaEl = document.getElementById('selectedAlbumMeta');
+  const listEl = document.getElementById('selectedTrackList');
+
+  artEl.src         = artUrl;
+  nameEl.textContent   = album.collectionName;
+  artistEl.textContent = album.artistName;
+  const year = album.releaseDate ? new Date(album.releaseDate).getFullYear() : '';
+  metaEl.textContent   = [year, album.primaryGenreName, `${album.trackCount} tracks`].filter(Boolean).join(' · ');
+  listEl.textContent   = 'Loading tracks…';
+  panel.hidden         = false;
+  document.getElementById('musicSearchResults').innerHTML = '';
+
+  const tracks = await itunesTracks(album.collectionId).catch(() => []);
+  _selectedAlbum = { album, artUrl, tracks };
+  listEl.innerHTML = tracks.map(t =>
+    `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #111">
+      <span style="color:#555;min-width:20px;text-align:right">${t.n}</span>
+      <span style="flex:1">${esc(t.title)}</span>
+      <span style="color:#444">${t.duration ? `${Math.floor(t.duration/60)}:${String(t.duration%60).padStart(2,'0')}` : ''}</span>
+    </div>`
+  ).join('') || '<div class="muted" style="font-size:11px">No tracks found</div>';
+}
+
+document.getElementById('btnClearSelection')?.addEventListener('click', () => {
+  document.getElementById('musicSelectedPanel').hidden = true;
+  _selectedAlbum = null;
 });
 
-document.getElementById('btnAddAlbum')?.addEventListener('click', () => {
-  const form = document.getElementById('addAlbumForm');
-  form.hidden = !form.hidden;
+let musicSearchDebounce;
+document.getElementById('btnMusicSearch')?.addEventListener('click', async () => {
+  const q = document.getElementById('musicSearchInput').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('btnMusicSearch');
+  btn.textContent = 'Searching…'; btn.disabled = true;
+  try {
+    const results = await itunesSearch(q);
+    renderItunesResults(results);
+    document.getElementById('musicSelectedPanel').hidden = true;
+    _selectedAlbum = null;
+  } catch (e) { appendLog(`[ERR] iTunes search: ${e.message}`); }
+  btn.textContent = 'Search iTunes'; btn.disabled = false;
 });
-document.getElementById('btnCancelAlbum')?.addEventListener('click', () => {
-  document.getElementById('addAlbumForm').hidden = true;
+
+document.getElementById('musicSearchInput')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btnMusicSearch').click();
 });
 
 document.getElementById('btnCreateAlbum')?.addEventListener('click', async () => {
-  const artist     = document.getElementById('albumArtist').value.trim();
-  const album      = document.getElementById('albumName').value.trim();
-  const year       = document.getElementById('albumYear').value.trim();
-  const torrentSource = document.getElementById('albumMagnet').value.trim();
-  const coverUrl   = document.getElementById('albumCoverUrl').value.trim();
-  if (!artist || !album) { appendLog('[ERR] Artist and album name required'); return; }
+  if (!_selectedAlbum) { appendLog('[ERR] No album selected'); return; }
+  const magnet = document.getElementById('albumMagnet').value.trim();
+  const { album, artUrl, tracks } = _selectedAlbum;
+  const year = album.releaseDate ? new Date(album.releaseDate).getFullYear() : null;
 
   const btn = document.getElementById('btnCreateAlbum');
   btn.textContent = 'Adding…'; btn.disabled = true;
@@ -577,17 +667,25 @@ document.getElementById('btnCreateAlbum')?.addEventListener('click', async () =>
   const res = await fetch('/api/admin/music/album', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ artist, album, year: year ? parseInt(year) : null, torrentSource, coverUrl }),
+    body: JSON.stringify({
+      artist:        album.artistName,
+      album:         album.collectionName,
+      year,
+      coverUrl:      artUrl,
+      torrentSource: magnet || null,
+      tracks,
+      itunesId:      album.collectionId,
+    }),
   });
   const data = await res.json();
-  btn.textContent = 'Add Album'; btn.disabled = false;
+  btn.textContent = 'Add to Library'; btn.disabled = false;
 
   if (res.ok) {
-    appendLog(`[LOG] Album added: ${artist} — ${album} (${data.albumId})`);
-    ['albumArtist','albumName','albumYear','albumMagnet','albumCoverUrl'].forEach(id => {
-      document.getElementById(id).value = '';
-    });
-    document.getElementById('addAlbumForm').hidden = true;
+    appendLog(`[LOG] Album queued: ${album.artistName} — ${album.collectionName}`);
+    document.getElementById('albumMagnet').value = '';
+    document.getElementById('musicSelectedPanel').hidden = true;
+    document.getElementById('musicSearchResults').innerHTML = '';
+    _selectedAlbum = null;
     fetchMusicAdmin();
   } else {
     appendLog(`[ERR] Add album failed: ${data.error}`);
@@ -596,15 +694,11 @@ document.getElementById('btnCreateAlbum')?.addEventListener('click', async () =>
 
 document.getElementById('musicAlbumsTbody')?.addEventListener('click', async (e) => {
   const del = e.target.closest('[data-music-del]');
-  if (del) {
-    await fetch(`/api/admin/music/album/${del.dataset.musicDel}`, { method: 'DELETE' });
-    fetchMusicAdmin();
-    return;
-  }
+  if (del) { await fetch(`/api/admin/music/album/${del.dataset.musicDel}`, { method: 'DELETE' }); fetchMusicAdmin(); return; }
   const retry = e.target.closest('[data-music-retry]');
   if (retry) {
     await fetch(`/api/admin/music/album/${retry.dataset.musicRetry}/retry`, { method: 'POST' });
-    appendLog(`[LOG] Retrying music pipeline for ${retry.dataset.musicRetry}`);
+    appendLog(`[LOG] Retrying pipeline: ${retry.dataset.musicRetry}`);
     fetchMusicAdmin();
   }
 });

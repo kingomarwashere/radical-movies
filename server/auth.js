@@ -43,6 +43,14 @@ export function deleteUser(username) {
   const users = loadUsers().filter(u => u.username !== username);
   saveUsers(users);
 }
+export function updateUser(username, fields) {
+  const users = loadUsers();
+  const u = users.find(x => x.username === username);
+  if (!u) return false;
+  Object.assign(u, fields);
+  saveUsers(users);
+  return true;
+}
 
 // ── Session store (persisted to disk) ────────────────────────────────────
 const SESSIONS_FILE = process.env.DATA_DIR
@@ -217,6 +225,7 @@ export function authRoutes(app) {
       inTrial,
       trialEndsAt:     u?.trialEndsAt    || null,
       accessExpiresAt,
+      musicEnabled:    !!u?.musicEnabled,
     });
   });
 }

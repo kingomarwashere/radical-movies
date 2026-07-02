@@ -417,8 +417,8 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Username</th><th>Password</th><th>Created</th><th></th></tr></thead>
-        <tbody id="accountsTbody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th>Username</th><th>Password</th><th>Created</th><th>Music</th><th></th></tr></thead>
+        <tbody id="accountsTbody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -496,26 +496,37 @@
 <div id="tab-music" hidden>
   <div class="section">
     <div class="section-header">
-      <div class="section-title">Music</div>
+      <div class="section-title">Music Library</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <span class="muted" style="font-size:11px" id="musicEnabledLabel">—</span>
-        <button class="btn btn-ghost btn-sm" id="btnMusicToggle">Toggle On/Off</button>
-        <button class="btn btn-ghost btn-sm" style="border-color:#22c55e;color:#22c55e" id="btnAddAlbum">+ Add Album</button>
+        <span class="muted" style="font-size:11px">Access is per-user — toggle in Accounts tab</span>
       </div>
     </div>
-    <div id="addAlbumForm" hidden style="margin-bottom:20px;padding:16px;background:#0d0d0d;border:1px solid #1e1e1e;border-radius:8px;display:flex;flex-direction:column;gap:8px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input id="albumArtist" placeholder="Artist *" style="flex:1;min-width:140px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
-        <input id="albumName"   placeholder="Album name *" style="flex:1;min-width:160px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
-        <input id="albumYear"   placeholder="Year" type="number" style="width:80px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
-      </div>
-      <input id="albumMagnet"   placeholder="Magnet or torrent URL" style="width:100%;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
-      <input id="albumCoverUrl" placeholder="Cover art URL (optional — auto-extracted if blank)" style="width:100%;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost btn-sm" id="btnCreateAlbum" style="border-color:#22c55e;color:#22c55e">Add Album</button>
-        <button class="btn btn-ghost btn-sm" id="btnCancelAlbum">Cancel</button>
-      </div>
+
+    <!-- iTunes search -->
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <input id="musicSearchInput" placeholder="Search artist or album…" style="flex:1;padding:8px 12px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:13px;border-radius:4px;outline:none">
+      <button class="btn btn-ghost btn-sm" id="btnMusicSearch">Search iTunes</button>
     </div>
+
+    <!-- iTunes results grid -->
+    <div id="musicSearchResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-bottom:20px"></div>
+
+    <!-- Selected album + magnet form -->
+    <div id="musicSelectedPanel" hidden style="margin-bottom:20px;padding:16px;background:#0d0d0d;border:1px solid #333;border-radius:8px">
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px">
+        <img id="selectedAlbumArt" style="width:80px;height:80px;object-fit:cover;border-radius:6px;background:#1a1a1a;flex-shrink:0" src="" alt="">
+        <div>
+          <div id="selectedAlbumName" style="font-weight:700;font-size:15px;margin-bottom:2px"></div>
+          <div id="selectedAlbumArtist" style="color:#aaa;font-size:13px;margin-bottom:2px"></div>
+          <div id="selectedAlbumMeta" style="color:#555;font-size:11px"></div>
+        </div>
+        <button id="btnClearSelection" style="margin-left:auto;background:none;border:none;color:#555;font-size:18px;cursor:pointer;padding:0">✕</button>
+      </div>
+      <div id="selectedTrackList" style="max-height:180px;overflow-y:auto;margin-bottom:14px;font-size:12px;color:#888;border-top:1px solid #1e1e1e;padding-top:10px"></div>
+      <input id="albumMagnet" placeholder="Paste magnet link or torrent URL" style="width:100%;padding:8px 12px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;margin-bottom:10px">
+      <button class="btn btn-ghost btn-sm" id="btnCreateAlbum" style="border-color:#22c55e;color:#22c55e">Add to Library</button>
+    </div>
+
     <div class="table-wrap">
       <table>
         <thead><tr><th>Artist</th><th>Album</th><th>Year</th><th>Tracks</th><th>Status</th><th></th></tr></thead>

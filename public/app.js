@@ -128,6 +128,7 @@ async function checkAuth() {
     if (!data.paid) { location.href = '/upgrade'; return; }
     const expiresAt = data.inTrial ? data.trialEndsAt : data.accessExpiresAt;
     if (expiresAt && Date.now() < expiresAt) startExpiryBanner(expiresAt, data.inTrial ? 'trial' : 'access');
+    if (data.musicEnabled) initMusic(true);
   } catch {
     location.href = '/login';
   }
@@ -169,7 +170,6 @@ async function init() {
   setupPlayerControls();
   startLibraryPolling();
   loadAll();
-  initMusic();
 }
 
 async function loadAll() {
@@ -1360,12 +1360,9 @@ const musicBarPlay  = document.getElementById('musicBarPlay');
 const musicBarFill  = document.getElementById('musicBarFill');
 const musicBarProgressWrap = document.getElementById('musicBarProgressWrap');
 
-async function initMusic() {
-  try {
-    const { enabled } = await fetch('/api/music/enabled').then(r => r.json());
-    if (!enabled) return;
-    document.querySelectorAll('.music-nav').forEach(el => el.hidden = false);
-  } catch {}
+function initMusic(musicEnabled) {
+  if (!musicEnabled) return;
+  document.querySelectorAll('.music-nav').forEach(el => el.hidden = false);
 }
 
 async function loadMusicSection() {
