@@ -482,6 +482,9 @@ app.delete('/api/admin/jobs/completed', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Watch Party rooms ──────────────────────────────────────────────────────
+const partyRooms = new Map(); // roomId → { host, streamUrl, title, currentTime, playing, members }
+
 // ── Socket.io ──────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   socket.on('watch:join', (jobId) => {
@@ -517,10 +520,54 @@ io.on('connection', (socket) => {
     broadcastAdmin();
   });
 
+  // ── Watch Party ────────────────────────────────────────────────────────────
+  socket.on('party:create', ({ streamUrl, title }) => {
+    const roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
+    partyRooms.set(roomId, { host: socket.id, streamUrl, title, currentTime: 0, playing: false, members: new Set([socket.id]) });
+    socket.join(`party:${roomId}`);
+    socket.emit('party:joined', { roomId, isHost: true, memberCount: 1, streamUrl, title });
+  });
+
+  socket.on('party:join', (roomId) => {
+    const room = partyRooms.get(roomId);
+    if (!room) { socket.emit('party:error', 'Room not found or expired'); return; }
+    room.members.add(socket.id);
+    socket.join(`party:${roomId}`);
+    socket.emit('party:joined', { roomId, isHost: false, memberCount: room.members.size, streamUrl: room.streamUrl, title: room.title });
+    socket.emit('party:sync', { currentTime: room.currentTime, playing: room.playing });
+    io.to(`party:${roomId}`).emit('party:members', room.members.size);
+  });
+
+  socket.on('party:update', ({ roomId, currentTime, playing }) => {
+    const room = partyRooms.get(roomId);
+    if (!room || room.host !== socket.id) return;
+    room.currentTime = currentTime;
+    room.playing     = playing;
+    socket.to(`party:${roomId}`).emit('party:sync', { currentTime, playing });
+  });
+
+  socket.on('party:leave', (roomId) => {
+    const room = partyRooms.get(roomId);
+    if (!room) return;
+    room.members.delete(socket.id);
+    socket.leave(`party:${roomId}`);
+    if (room.members.size === 0) { partyRooms.delete(roomId); return; }
+    if (room.host === socket.id) room.host = [...room.members][0]; // promote next member
+    io.to(`party:${roomId}`).emit('party:members', room.members.size);
+  });
+
   socket.on('disconnect', () => {
     // Clean up any streams belonging to this socket
     for (const [id, s] of activeStreams) {
       if (s._socketId === socket.id) { activeStreams.delete(id); }
+    }
+    // Clean up party rooms
+    for (const [roomId, room] of partyRooms) {
+      if (!room.members.has(socket.id)) continue;
+      room.members.delete(socket.id);
+      if (room.members.size === 0) { partyRooms.delete(roomId); continue; }
+      if (room.host === socket.id) room.host = [...room.members][0];
+      io.to(`party:${roomId}`).emit('party:members', room.members.size);
     }
     broadcastAdmin();
   });

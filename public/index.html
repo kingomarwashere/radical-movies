@@ -256,6 +256,38 @@
     <video class="player-video" id="videoEl" playsinline></video>
     <div class="player-spinner" id="playerSpinner" hidden></div>
     <div class="player-center-icon" id="playerCenterIcon"></div>
+
+    <!-- Auto-next episode -->
+    <div class="auto-next" id="autoNextOverlay" hidden>
+      <div class="auto-next-box">
+        <img class="auto-next-poster" id="autoNextPoster" src="" alt="">
+        <div class="auto-next-info">
+          <div class="auto-next-label">Next Episode</div>
+          <div class="auto-next-title" id="autoNextTitle"></div>
+          <div class="auto-next-row">
+            <button class="btn btn-watch" id="autoNextPlay" style="padding:8px 18px;font-size:13px">▶ Play Now</button>
+            <button class="btn btn-info" id="autoNextCancel" style="padding:8px 18px;font-size:13px">Cancel</button>
+            <div class="auto-next-timer"><span id="autoNextCount">10</span>s</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Watch Party panel -->
+    <div class="party-panel" id="partyPanel" hidden>
+      <div class="party-header">
+        <span class="party-icon">🎉</span>
+        <span id="partyTitle">Watch Party</span>
+        <span class="party-members" id="partyMembers">1 watching</span>
+        <button class="party-close-btn" id="partyClose">✕</button>
+      </div>
+      <div id="partyLinkRow" hidden>
+        <input class="party-link-input" id="partyLinkInput" readonly>
+        <button class="party-copy-btn" id="partyCopyBtn">Copy Link</button>
+      </div>
+      <div class="party-status" id="partyStatus">Creating room…</div>
+    </div>
+
     <div class="player-ui" id="playerUi">
       <div class="player-top">
         <span class="player-movie-title" id="playerTitle"></span>
@@ -278,6 +310,7 @@
             <span class="player-time-display" id="playerTimeDisplay">0:00 / 0:00</span>
           </div>
           <div class="player-right">
+            <button class="player-btn player-btn-party" id="playerPartyBtn" title="Watch Party">🎉</button>
             <button class="player-btn" id="playerFsBtn" title="Fullscreen (F)"></button>
           </div>
         </div>

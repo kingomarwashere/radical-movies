@@ -31,6 +31,11 @@ let catalogData = [];
 let _watchProgress = {};
 let _lastProgressSave = 0;
 let _currentPosterPath = null;
+let _nowPlaying = null;        // { type, showId, showName, season, episode } for TV
+let _autoNextTimer = null;
+let _partyRoomId = null;
+let _partyIsHost = false;
+let _partyEnabled = false;     // true once party panel is open
 let _watchlist = [];
 let _ratings = {};
 let _watchedTmdbSet = new Set();
@@ -204,6 +209,7 @@ async function init() {
   setupNav();
   setupSearch();
   setupPlayerControls();
+  setupParty();
   startLibraryPolling();
   loadAll();
 }
@@ -636,11 +642,12 @@ async function loadEpisodes(showId, showTitle, showYear, season) {
         const btn = e.currentTarget;
         // Catalog item — play immediately
         const cat = catalogData.find(c => c.tmdbId === showId && c.type === 'tv' && c.season == season && c.episode == ep.episode_number);
-        if (cat?.streamUrl) { openPlayer(cat.streamUrl, `${showTitle} S${s0}E${e0}`); return; }
+        const epMeta = { type: 'tv', showId, showName: showTitle, season, episode: ep.episode_number, posterPath: currentShow?.poster_path };
+        if (cat?.streamUrl) { openPlayer(cat.streamUrl, `${showTitle} S${s0}E${e0}`, currentShow?.poster_path, epMeta); return; }
         // Personal library check
         const alreadyIn = libraryData.find(j => j.tmdbId === showId && j.season == season && j.episode == ep.episode_number && j.status !== 'error');
         if (alreadyIn) {
-          if (alreadyIn.status === 'ready' && alreadyIn.streamUrl) { openPlayer(alreadyIn.streamUrl, `${showTitle} S${s0}E${e0}`); }
+          if (alreadyIn.status === 'ready' && alreadyIn.streamUrl) { openPlayer(alreadyIn.streamUrl, `${showTitle} S${s0}E${e0}`, currentShow?.poster_path, epMeta); }
           return;
         }
         queueEpisode(showTitle, showYear, showId, season, ep.episode_number, ep.name, btn);
@@ -763,7 +770,7 @@ async function queueEpisode(showTitle, showYear, showId, season, episode, epTitl
     }
 
     const { jobId, streamUrl, ready } = data;
-    if (ready && streamUrl) { openPlayer(streamUrl, jobTitle); return; }
+    if (ready && streamUrl) { openPlayer(streamUrl, jobTitle, null, { type: 'tv', showId, showName: showTitle, season, episode }); return; }
 
     currentJobId = jobId;
     socket.emit('watch:join', jobId);
@@ -819,11 +826,13 @@ let _playerTogglePlay = null;
 let _playerToggleFs   = null;
 let _playerToggleMute = null;
 
-function openPlayer(streamUrl, title, posterPath = null) {
+function openPlayer(streamUrl, title, posterPath = null, meta = null) {
+  cancelAutoNext();
   fetchOverlay.hidden = true;
   document.body.style.overflow = 'hidden';
   playerTitle.textContent = title || '';
   _currentPosterPath = posterPath;
+  _nowPlaying = meta;
   videoEl.src = streamUrl;
   playerOverlay.hidden = false;
   $('playerUi').classList.add('visible');
@@ -843,6 +852,8 @@ function openPlayer(streamUrl, title, posterPath = null) {
 }
 
 function closePlayer() {
+  cancelAutoNext();
+  leaveParty();
   if (document.fullscreenElement) document.exitFullscreen();
   videoEl.pause();
   videoEl.src = '';
@@ -850,10 +861,157 @@ function closePlayer() {
   document.body.style.overflow = '';
   if (_currentStreamId) { socket.emit('stream:end', { streamId: _currentStreamId }); _currentStreamId = null; }
   currentJobId = null;
+  _nowPlaying = null;
   // Restore overlapping UI
   const banner = $('trialBanner');
   if (banner && document.body.classList.contains('has-trial-banner')) banner.hidden = false;
   window.Tawk_API?.showWidget?.();
+}
+
+// ── Auto-next episode ──────────────────────────────────────────────────────
+function cancelAutoNext() {
+  clearInterval(_autoNextTimer);
+  _autoNextTimer = null;
+  const el = $('autoNextOverlay');
+  if (el) el.hidden = true;
+}
+
+function showAutoNext(next) {
+  const overlay = $('autoNextOverlay');
+  const countEl = $('autoNextCount');
+  $('autoNextTitle').textContent = next.title;
+  $('autoNextPoster').src = next.posterPath ? POSTER(next.posterPath) : '/no-poster.svg';
+  overlay.hidden = false;
+
+  let secs = 10;
+  countEl.textContent = secs;
+  _autoNextTimer = setInterval(() => {
+    secs--;
+    countEl.textContent = secs;
+    if (secs <= 0) { cancelAutoNext(); playNext(next); }
+  }, 1000);
+
+  $('autoNextPlay').onclick   = () => { cancelAutoNext(); playNext(next); };
+  $('autoNextCancel').onclick = () => cancelAutoNext();
+}
+
+function playNext(next) {
+  currentJobId = next.jobId;
+  openPlayer(next.streamUrl, next.title, next.posterPath, { type: 'tv', showId: next.showId, showName: next.showName, season: next.season, episode: next.episode, posterPath: next.posterPath });
+}
+
+async function checkAutoNext() {
+  if (!_nowPlaying || _nowPlaying.type !== 'tv') return;
+  const { showId, showName, season, episode, posterPath } = _nowPlaying;
+
+  for (const [s, e] of [[season, episode + 1], [season + 1, 1]]) {
+    const cat = catalogData.find(c => c.tmdbId === showId && c.type === 'tv' && c.season == s && c.episode == e && c.streamUrl);
+    const lib = libraryData.find(j => j.tmdbId === showId && j.type === 'tv' && j.season == s && j.episode == e && j.status === 'ready' && j.streamUrl);
+    if (!cat && !lib) continue;
+    const streamUrl = cat?.streamUrl || lib?.streamUrl;
+    const jobId     = lib?.id || null;
+    const ss = String(s).padStart(2, '0'), ee = String(e).padStart(2, '0');
+    try {
+      const eps = await tmdb(`/tv/${showId}/season/${s}`);
+      const ep  = (eps.episodes || []).find(x => x.episode_number === e);
+      if (!ep) continue;
+      showAutoNext({ showId, showName, season: s, episode: e, streamUrl, jobId, posterPath,
+        title: `${showName} S${ss}E${ee} — ${ep.name}` });
+      return;
+    } catch { continue; }
+  }
+}
+
+// ── Watch Party ────────────────────────────────────────────────────────────
+function leaveParty() {
+  if (_partyRoomId) { socket.emit('party:leave', _partyRoomId); _partyRoomId = null; }
+  _partyIsHost = false;
+  _partyEnabled = false;
+  const panel = $('partyPanel');
+  if (panel) panel.hidden = true;
+  $('playerPartyBtn')?.classList.remove('active');
+}
+
+function setupParty() {
+  const partyBtn  = $('playerPartyBtn');
+  const panel     = $('partyPanel');
+  const closeBtn  = $('partyClose');
+  const copyBtn   = $('partyCopyBtn');
+  const linkInput = $('partyLinkInput');
+  const statusEl  = $('partyStatus');
+  const membersEl = $('partyMembers');
+  const linkRow   = $('partyLinkRow');
+
+  partyBtn.addEventListener('click', () => {
+    if (panel.hidden) {
+      panel.hidden = false;
+      partyBtn.classList.add('active');
+      if (!_partyRoomId) {
+        statusEl.textContent = 'Creating room…';
+        linkRow.hidden = true;
+        socket.emit('party:create', { streamUrl: videoEl.src, title: playerTitle.textContent });
+      }
+    } else {
+      leaveParty();
+    }
+  });
+
+  closeBtn.addEventListener('click', leaveParty);
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(linkInput.value).catch(() => {});
+    const orig = copyBtn.textContent;
+    copyBtn.textContent = '✓ Copied!';
+    setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+  });
+
+  socket.on('party:joined', ({ roomId, isHost, memberCount, streamUrl, title }) => {
+    _partyRoomId = roomId;
+    _partyIsHost = isHost;
+    _partyEnabled = true;
+    panel.hidden = false;
+    partyBtn.classList.add('active');
+    membersEl.textContent = `${memberCount} watching`;
+    const url = `${location.origin}/?party=${roomId}`;
+    linkInput.value = url;
+    linkRow.hidden  = false;
+    statusEl.textContent = isHost ? 'You are the host — share the link!' : 'Joined! Host controls playback.';
+    if (!isHost && streamUrl && videoEl.src !== streamUrl) {
+      openPlayer(streamUrl, title || playerTitle.textContent);
+    }
+  });
+
+  socket.on('party:sync', ({ currentTime, playing }) => {
+    if (_partyIsHost) return;
+    if (Math.abs(videoEl.currentTime - currentTime) > 2) videoEl.currentTime = currentTime;
+    if (playing && videoEl.paused)  videoEl.play().catch(() => {});
+    if (!playing && !videoEl.paused) videoEl.pause();
+    statusEl.textContent = playing ? '▶ In sync' : '⏸ Paused by host';
+    statusEl.className = 'party-status syncing';
+    setTimeout(() => { statusEl.className = 'party-status'; statusEl.textContent = 'Synced'; }, 1500);
+  });
+
+  socket.on('party:members', (count) => {
+    membersEl.textContent = `${count} watching`;
+  });
+
+  socket.on('party:error', (msg) => {
+    statusEl.textContent = `Error: ${msg}`;
+    panel.hidden = false;
+  });
+
+  // Auto-join from URL ?party=ROOMID
+  const partyParam = new URLSearchParams(location.search).get('party');
+  if (partyParam) {
+    socket.emit('party:join', partyParam);
+    history.replaceState({}, '', location.pathname);
+  }
+}
+
+// Emit party sync when host plays/pauses (called from player event handlers)
+function emitPartySync() {
+  if (!_partyEnabled || !_partyIsHost || !_partyRoomId) return;
+  socket.emit('party:update', { roomId: _partyRoomId, currentTime: videoEl.currentTime, playing: !videoEl.paused });
 }
 
 function setupPlayerControls() {
@@ -917,12 +1075,17 @@ function setupPlayerControls() {
   playBtn.addEventListener('click', _playerTogglePlay);
   playerClose.addEventListener('click', closePlayer);
 
-  videoEl.addEventListener('play', () => { playBtn.innerHTML = PAUSE_ICON; showControls(); });
+  videoEl.addEventListener('play',  () => { playBtn.innerHTML = PAUSE_ICON; showControls(); emitPartySync(); });
   videoEl.addEventListener('pause', () => {
     playBtn.innerHTML = PLAY_ICON;
     clearTimeout(hideTimer);
     playerUi.classList.add('visible');
     playerOverlay.style.cursor = '';
+    emitPartySync();
+  });
+  videoEl.addEventListener('ended', () => {
+    cancelAutoNext();
+    checkAutoNext();
   });
 
   // ── Center flash icon ─────────────────────────────────────────────────────
@@ -1030,6 +1193,7 @@ function setupPlayerControls() {
     isSeeking = false;
     document.removeEventListener('mousemove', applySeek);
     if (wasPlaying) videoEl.play().catch(() => {});
+    emitPartySync();
   }
 
   // ── Fullscreen ────────────────────────────────────────────────────────────
