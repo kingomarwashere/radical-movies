@@ -11,6 +11,7 @@ import os from 'os';
 import { spawn } from 'child_process';
 
 import { authRoutes, requireAuth, getUsers, deleteUser } from './auth.js';
+import { billingRoutes, handleWebhook, isPaid } from './billing.js';
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB, searchTPBEpisode } from './piratebay.js';
@@ -42,6 +43,9 @@ const io = new Server(httpServer, {
 });
 const PORT = process.env.PORT || 8080;
 
+// Stripe webhook needs raw body — must be before express.json()
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), handleWebhook);
+
 app.use(express.json());
 
 // Cache-bust token changes on every server start — forces browsers to re-fetch JS/CSS
@@ -70,8 +74,10 @@ app.use(express.static(PUBLIC_DIR, {
 }));
 
 // Auth routes (login/logout/me) — no auth needed
-app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
+app.get('/login',   (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
+app.get('/upgrade', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'upgrade.html')));
 authRoutes(app);
+billingRoutes(app, { requireAuth });
 
 // All API and socket routes require auth
 app.use((req, res, next) => {
@@ -188,7 +194,12 @@ app.get('/api/library', (req, res) => {
 });
 
 // ── Watch — start download pipeline ───────────────────────────────────────
-app.post('/api/watch', async (req, res) => {
+function requirePaid(req, res, next) {
+  if (isPaid(req.username)) return next();
+  res.status(402).json({ error: 'subscription_required', upgrade_url: '/upgrade' });
+}
+
+app.post('/api/watch', requirePaid, async (req, res) => {
   const { tmdbId, title, year, type, season, episode, showTitle } = req.body;
   if (!title) return res.status(400).json({ error: 'title required' });
 

@@ -152,7 +152,7 @@ export function authRoutes(app) {
     }
 
     const hashed = hashPassword(password);
-    users.push({ username, password: hashed, createdAt: Date.now() });
+    users.push({ username, password: hashed, createdAt: Date.now(), paid: false });
     saveUsers(users);
 
     const token = createSession(username);
@@ -202,6 +202,10 @@ export function authRoutes(app) {
   app.get('/api/auth/me', (req, res) => {
     const username = getUser(req);
     if (!username) return res.status(401).json({ error: 'Unauthorised' });
-    res.json({ username });
+    const users = loadUsers();
+    const u = users.find(x => x.username === username);
+    // Users without a paid field (created before billing) are grandfathered as paid
+    const paid = u ? u.paid !== false : false;
+    res.json({ username, paid, accessType: u?.accessType || null });
   });
 }

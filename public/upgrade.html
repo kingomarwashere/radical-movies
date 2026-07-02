@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Radical — Get Access</title>
+  <link rel="icon" type="image/jpeg" href="/favicon.jpg">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --red:  #ff0099;
+      --red2: #cc007a;
+      --bg:   #0a0a0a;
+      --bg2:  #111;
+      --bg3:  #1a1a1a;
+    }
+
+    body {
+      background: var(--bg);
+      color: #e5e5e5;
+      font-family: 'Roboto Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── Nav ── */
+    .nav {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 5%;
+    }
+    .logo { font-size: 22px; font-weight: 900; color: var(--red); letter-spacing: 3px; text-decoration: none; }
+    .nav-right { display: flex; align-items: center; gap: 16px; }
+    .nav-user { font-size: 12px; color: #666; }
+    .logout-link {
+      font-size: 12px; color: #555; cursor: pointer;
+      background: none; border: none; font-family: inherit;
+      transition: color .2s;
+    }
+    .logout-link:hover { color: #aaa; }
+
+    /* ── Hero text ── */
+    .hero {
+      text-align: center;
+      padding: 60px 20px 48px;
+      max-width: 640px;
+    }
+    .hero-eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--red);
+      margin-bottom: 20px;
+    }
+    .hero-title {
+      font-size: clamp(28px, 5vw, 48px);
+      font-weight: 900;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+    .hero-sub {
+      font-size: 14px;
+      color: #777;
+      line-height: 1.7;
+    }
+
+    /* ── Plans ── */
+    .plans {
+      display: flex;
+      gap: 16px;
+      padding: 0 20px 48px;
+      width: 100%;
+      max-width: 720px;
+      justify-content: center;
+    }
+
+    .plan {
+      flex: 1;
+      max-width: 320px;
+      background: var(--bg2);
+      border: 1px solid #222;
+      border-radius: 12px;
+      padding: 32px 28px;
+      position: relative;
+      transition: border-color .2s, transform .2s;
+      cursor: pointer;
+    }
+    .plan:hover {
+      border-color: #444;
+      transform: translateY(-2px);
+    }
+    .plan.featured {
+      border-color: var(--red);
+      background: linear-gradient(135deg, #111 0%, #160010 100%);
+    }
+    .plan.featured:hover { border-color: var(--red); }
+
+    .plan-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--red);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 4px 14px;
+      border-radius: 99px;
+      white-space: nowrap;
+    }
+
+    .plan-name {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #777;
+      margin-bottom: 20px;
+    }
+    .plan.featured .plan-name { color: #aaa; }
+
+    .plan-strike {
+      font-size: 13px;
+      color: #444;
+      text-decoration: line-through;
+      margin-bottom: 4px;
+    }
+
+    .plan-price {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    .plan-price .currency { font-size: 22px; font-weight: 700; color: #fff; }
+    .plan-price .amount   { font-size: 52px; font-weight: 900; color: #fff; line-height: 1; }
+    .plan-price .period   { font-size: 14px; color: #666; }
+
+    .plan-equiv {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 28px;
+      min-height: 18px;
+    }
+    .plan.featured .plan-equiv { color: #774; }
+
+    .plan-features {
+      list-style: none;
+      margin-bottom: 28px;
+    }
+    .plan-features li {
+      font-size: 13px;
+      color: #888;
+      padding: 6px 0;
+      border-bottom: 1px solid #1e1e1e;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .plan-features li:last-child { border-bottom: none; }
+    .plan-features li::before { content: '✓'; color: var(--red); font-weight: 700; }
+
+    .plan-btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      cursor: pointer;
+      border: none;
+      transition: all .2s;
+    }
+    .plan-btn-outline {
+      background: none;
+      border: 1px solid #333;
+      color: #aaa;
+    }
+    .plan-btn-outline:hover { border-color: #666; color: #fff; }
+    .plan-btn-fill {
+      background: var(--red);
+      color: #fff;
+    }
+    .plan-btn-fill:hover { background: var(--red2); }
+    .plan-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Divider ── */
+    .divider {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 20px 36px;
+      color: #333;
+      font-size: 12px;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #1e1e1e;
+    }
+
+    /* ── Invite code ── */
+    .invite-wrap {
+      width: 100%;
+      max-width: 420px;
+      padding: 0 20px 24px;
+    }
+    .invite-label {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .invite-row {
+      display: flex;
+      gap: 8px;
+    }
+    .invite-input {
+      flex: 1;
+      background: var(--bg2);
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      color: #fff;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      padding: 12px 16px;
+      text-transform: uppercase;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .invite-input::placeholder { color: #333; letter-spacing: 1px; font-weight: 400; text-transform: none; font-size: 13px; }
+    .invite-input:focus { border-color: #555; }
+    .invite-btn {
+      background: var(--bg3);
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #aaa;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 12px 20px;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .invite-btn:hover { border-color: #555; color: #fff; }
+    .invite-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Feedback ── */
+    .feedback {
+      font-size: 13px;
+      text-align: center;
+      min-height: 20px;
+      margin-top: 12px;
+      padding: 0 20px;
+    }
+    .feedback.error { color: #ff6b6b; }
+    .feedback.ok    { color: #4ade80; }
+
+    /* ── Footer ── */
+    .footer-note {
+      font-size: 11px;
+      color: #333;
+      text-align: center;
+      padding: 24px 20px 48px;
+      line-height: 1.8;
+    }
+    .footer-note a { color: #444; }
+
+    @media (max-width: 580px) {
+      .plans { flex-direction: column; align-items: center; }
+      .plan  { max-width: 100%; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <a class="logo" href="/">RADICAL</a>
+    <div class="nav-right">
+      <span class="nav-user" id="navUser"></span>
+      <button class="logout-link" id="logoutBtn">Sign out</button>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <div class="hero-eyebrow">Unlimited Access</div>
+    <h1 class="hero-title">Movies & TV.<br>On demand.</h1>
+    <p class="hero-sub">Stream anything in the catalog instantly. No ads. No limits.<br>Cancel anytime.</p>
+  </div>
+
+  <div class="plans">
+
+    <!-- Monthly -->
+    <div class="plan" id="planMonthly">
+      <div class="plan-name">Monthly</div>
+      <div class="plan-strike">Normally $25/mo</div>
+      <div class="plan-price">
+        <span class="currency">$</span>
+        <span class="amount">10</span>
+        <span class="period">/mo</span>
+      </div>
+      <div class="plan-equiv">&nbsp;</div>
+      <ul class="plan-features">
+        <li>Unlimited streaming</li>
+        <li>Movies &amp; TV shows</li>
+        <li>HD &amp; 4K quality</li>
+        <li>Cancel anytime</li>
+      </ul>
+      <button class="plan-btn plan-btn-outline" id="btnMonthly">Get Monthly</button>
+    </div>
+
+    <!-- Annual — featured -->
+    <div class="plan featured" id="planAnnual">
+      <div class="plan-badge">Best Value</div>
+      <div class="plan-name">Annual</div>
+      <div class="plan-strike">Normally $300/yr</div>
+      <div class="plan-price">
+        <span class="currency">$</span>
+        <span class="amount">60</span>
+        <span class="period">/yr</span>
+      </div>
+      <div class="plan-equiv" style="color:#b06030">That's $5/month — save $240</div>
+      <ul class="plan-features">
+        <li>Everything in Monthly</li>
+        <li>2 months free vs monthly</li>
+        <li>Priority support</li>
+        <li>Lock in the best rate</li>
+      </ul>
+      <button class="plan-btn plan-btn-fill" id="btnAnnual">Get Annual</button>
+    </div>
+
+  </div>
+
+  <div class="divider">or use an invite code</div>
+
+  <div class="invite-wrap">
+    <div class="invite-label">Have a code? Enter it below for free access.</div>
+    <div class="invite-row">
+      <input class="invite-input" id="inviteInput" type="text" placeholder="Enter invite code" maxlength="16" autocomplete="off" spellcheck="false">
+      <button class="invite-btn" id="inviteBtn">Redeem</button>
+    </div>
+  </div>
+
+  <div class="feedback" id="feedback"></div>
+
+  <div class="footer-note">
+    Secure payment via Stripe. Subscriptions renew automatically. Cancel any time from your account.
+  </div>
+
+  <script>
+    // Load user info
+    fetch('/api/auth/me').then(r => r.json()).then(d => {
+      if (d.username) {
+        document.getElementById('navUser').textContent = d.username;
+        // Already paid — shouldn't be here
+        if (d.paid) location.href = '/';
+      } else {
+        location.href = '/login';
+      }
+    }).catch(() => location.href = '/login');
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      location.href = '/login';
+    });
+
+    function setFeedback(msg, type) {
+      const el = document.getElementById('feedback');
+      el.textContent = msg;
+      el.className = 'feedback ' + (type || '');
+    }
+
+    function setLoading(id, loading) {
+      const btn = document.getElementById(id);
+      btn.disabled = loading;
+      if (id === 'btnMonthly') btn.textContent = loading ? 'Redirecting…' : 'Get Monthly';
+      if (id === 'btnAnnual')  btn.textContent = loading ? 'Redirecting…' : 'Get Annual';
+      if (id === 'inviteBtn')  btn.textContent = loading ? 'Checking…'    : 'Redeem';
+    }
+
+    async function checkout(plan) {
+      const btnId = plan === 'annual' ? 'btnAnnual' : 'btnMonthly';
+      setLoading(btnId, true);
+      setFeedback('');
+      try {
+        const res = await fetch('/api/billing/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setFeedback(data.error || 'Something went wrong', 'error'); setLoading(btnId, false); return; }
+        location.href = data.url;
+      } catch {
+        setFeedback('Network error — please try again', 'error');
+        setLoading(btnId, false);
+      }
+    }
+
+    document.getElementById('btnMonthly').addEventListener('click', () => checkout('monthly'));
+    document.getElementById('btnAnnual').addEventListener('click',  () => checkout('annual'));
+
+    // Invite code
+    document.getElementById('inviteBtn').addEventListener('click', async () => {
+      const code = document.getElementById('inviteInput').value.trim();
+      if (!code) { setFeedback('Enter a code first', 'error'); return; }
+      setLoading('inviteBtn', true);
+      setFeedback('');
+      try {
+        const res = await fetch('/api/billing/redeem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setFeedback(data.error || 'Invalid code', 'error'); setLoading('inviteBtn', false); return; }
+        setFeedback('Code accepted! Redirecting…', 'ok');
+        setTimeout(() => location.href = '/', 1000);
+      } catch {
+        setFeedback('Network error', 'error');
+        setLoading('inviteBtn', false);
+      }
+    });
+
+    document.getElementById('inviteInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('inviteBtn').click();
+    });
+  </script>
+</body>
+</html>

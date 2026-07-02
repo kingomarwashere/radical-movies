@@ -125,6 +125,7 @@ async function checkAuth() {
     const data = await res.json();
     loggedInUser = data.username;
     navUsername.textContent = loggedInUser;
+    if (!data.paid) { location.href = '/upgrade'; return; }
   } catch {
     location.href = '/login';
   }
