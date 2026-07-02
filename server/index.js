@@ -31,6 +31,7 @@ import { searchNyaa } from './nyaa.js';
 import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode } from './transcoder.js';
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 import { initCatalog, syncCatalog, getCatalogItems, getCatalogStats } from './catalog.js';
+import { getUserProgress, setProgress, deleteProgress } from './progress.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -174,6 +175,14 @@ app.get('/api/tv/:id', wrap((req) => tmdb.getTVShow(req.params.id)));
 // ── Catalog ────────────────────────────────────────────────────────────────
 app.get('/api/catalog', (req, res) => res.json(getCatalogItems()));
 app.get('/api/catalog/stats', (req, res) => res.json(getCatalogStats()));
+
+app.get('/api/progress', requireAuth, (req, res) => res.json(getUserProgress(req.username)));
+app.post('/api/progress/:jobId', requireAuth, (req, res) => {
+  const { position, duration, pct, title, streamUrl, posterPath } = req.body || {};
+  if (pct >= 92) deleteProgress(req.username, req.params.jobId);
+  else if (position > 0) setProgress(req.username, req.params.jobId, { position, duration, pct, title, streamUrl, posterPath });
+  res.json({ ok: true });
+});
 app.post('/api/admin/catalog/sync', (req, res) => {
   syncCatalog().catch(e => console.error('[catalog] admin sync error:', e.message));
   res.json({ ok: true, message: 'Catalog sync started in background' });

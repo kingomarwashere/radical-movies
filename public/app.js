@@ -28,6 +28,9 @@ let loggedInUser = null;
 let libraryPollTimer = null;
 let libraryData = [];
 let catalogData = [];
+let _watchProgress = {};
+let _lastProgressSave = 0;
+let _currentPosterPath = null;
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -266,7 +269,7 @@ function renderHero(m) {
   if (heroReady) {
     heroWatch.textContent = '▶  Watch Now';
     heroWatch.disabled    = false;
-    heroWatch.onclick     = () => openPlayer(heroStream, heroTitle2);
+    heroWatch.onclick     = () => openPlayer(heroStream, heroTitle2, m.poster_path);
   } else if (heroLib) {
     heroWatch.textContent = '✓ In Library';
     heroWatch.disabled    = true;
@@ -409,11 +412,11 @@ async function openModal(tmdbId) {
     if (catalogItem?.streamUrl) {
       modalWatch.textContent = '▶  Play Now';
       modalWatch.disabled = false;
-      modalWatch.onclick = () => { closeModal(); openPlayer(catalogItem.streamUrl, m.title); };
+      modalWatch.onclick = () => { closeModal(); openPlayer(catalogItem.streamUrl, m.title, m.poster_path); };
     } else if (inLibrary?.status === 'ready') {
       modalWatch.textContent = '▶  Play';
       modalWatch.disabled = false;
-      modalWatch.onclick = () => { closeModal(); openPlayer(inLibrary.streamUrl, m.title); };
+      modalWatch.onclick = () => { closeModal(); openPlayer(inLibrary.streamUrl, m.title, m.poster_path); };
     } else if (inLibrary) {
       modalWatch.textContent = '✓ In Library';
       modalWatch.disabled = true;
@@ -743,13 +746,21 @@ let _playerTogglePlay = null;
 let _playerToggleFs   = null;
 let _playerToggleMute = null;
 
-function openPlayer(streamUrl, title) {
+function openPlayer(streamUrl, title, posterPath = null) {
   fetchOverlay.hidden = true;
   document.body.style.overflow = 'hidden';
   playerTitle.textContent = title || '';
+  _currentPosterPath = posterPath;
   videoEl.src = streamUrl;
   playerOverlay.hidden = false;
   $('playerUi').classList.add('visible');
+  // Restore saved position
+  const saved = currentJobId ? _watchProgress[currentJobId] : null;
+  if (saved?.position > 5 && saved?.pct < 92) {
+    videoEl.addEventListener('loadedmetadata', () => {
+      videoEl.currentTime = saved.position;
+    }, { once: true });
+  }
   videoEl.play().catch(() => {});
   _currentStreamId = Math.random().toString(36).slice(2);
   socket.emit('stream:start', { streamId: _currentStreamId, title, streamUrl, jobId: currentJobId });
@@ -881,6 +892,23 @@ function setupPlayerControls() {
       timeDisplay.textContent = `${fmt(videoEl.currentTime)} / ${fmt(videoEl.duration)}`;
     }
     syncBuffered();
+    // Save progress every 10s (skip short clips and near start)
+    if (currentJobId && videoEl.duration > 60 && videoEl.currentTime > 5 && Date.now() - _lastProgressSave > 10000) {
+      _lastProgressSave = Date.now();
+      const watchPct = Math.round(videoEl.currentTime / videoEl.duration * 100);
+      const record = { position: videoEl.currentTime, duration: videoEl.duration, pct: watchPct,
+                       title: playerTitle.textContent, streamUrl: videoEl.src, posterPath: _currentPosterPath };
+      _watchProgress[currentJobId] = record;
+      fetch(`/api/progress/${currentJobId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record),
+      }).catch(() => {});
+      if (watchPct >= 92) {
+        delete _watchProgress[currentJobId];
+        renderContinueWatching();
+      } else {
+        renderContinueWatching();
+      }
+    }
   });
   videoEl.addEventListener('progress', syncBuffered);
 
@@ -947,10 +975,60 @@ function setupPlayerControls() {
   videoEl.addEventListener('playing', () => { spinner.hidden = true; });
 }
 
+function fmtTime(s) {
+  s = Math.floor(s || 0);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sc = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}` : `${m}:${String(sc).padStart(2,'0')}`;
+}
+
+// ── Continue Watching ──────────────────────────────────────────────────────
+async function loadProgress() {
+  try {
+    _watchProgress = await fetch('/api/progress').then(r => r.json());
+    renderContinueWatching();
+  } catch {}
+}
+
+function renderContinueWatching() {
+  const items = Object.entries(_watchProgress)
+    .filter(([, v]) => v.pct > 3 && v.pct < 92)
+    .sort(([, a], [, b]) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+  const row   = $('rowContinue');
+  const track = $('rowContinueTrack');
+  if (!items.length) { row.hidden = true; return; }
+  row.hidden = false;
+
+  track.innerHTML = items.map(([jobId, v]) => `
+    <div class="card" data-continue-id="${jobId}" style="cursor:pointer">
+      <div style="position:relative">
+        <img class="card-img" src="${v.posterPath ? POSTER(v.posterPath) : '/no-poster.svg'}" loading="lazy">
+        <div class="continue-progress-wrap">
+          <div class="continue-progress-fill" style="width:${v.pct}%"></div>
+        </div>
+        <div class="continue-play-icon">▶</div>
+      </div>
+      <div class="card-info" style="opacity:1;position:relative;background:none;padding:8px 4px 4px">
+        <div class="card-title">${escHtml(v.title || '')}</div>
+        <div class="card-meta" style="color:#888">${v.duration ? fmtTime(v.position) + ' / ' + fmtTime(v.duration) : ''}</div>
+      </div>
+    </div>`).join('');
+
+  track.querySelectorAll('[data-continue-id]').forEach(card => {
+    card.addEventListener('click', () => {
+      const v = _watchProgress[card.dataset.continueId];
+      if (!v?.streamUrl) return;
+      currentJobId = card.dataset.continueId;
+      openPlayer(v.streamUrl, v.title, v.posterPath);
+    });
+  });
+}
+
 // ── Library polling ────────────────────────────────────────────────────────
 function startLibraryPolling() {
   fetchLibrary();
   fetchCatalog();
+  loadProgress();
   libraryPollTimer = setInterval(fetchLibrary, 5000);
   setInterval(fetchCatalog, 30_000);
 }
@@ -1031,7 +1109,7 @@ function createCatalogCard(item) {
     const playTitle = item.type === 'tv'
       ? `${item.showTitle || item.title} S01E01`
       : (item.title || '');
-    openPlayer(item.streamUrl, playTitle);
+    openPlayer(item.streamUrl, playTitle, item.posterPath);
   });
 
   return card;
