@@ -465,6 +465,29 @@
         <button class="btn btn-sm" id="btnDeleteSelected" hidden style="background:var(--red);color:#fff">🗑 Delete Selected</button>
       </div>
     </div>
+    <!-- Filter bar -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      <input id="jobSearch" type="text" placeholder="Filter title or user…"
+        style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:200px">
+      <select id="jobStatusFilter"
+        style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+        <option value="">All statuses</option>
+        <option value="ready">Ready</option>
+        <option value="downloading">Downloading</option>
+        <option value="uploading">Uploading</option>
+        <option value="searching">Searching</option>
+        <option value="error">Error</option>
+      </select>
+      <select id="jobTypeFilter"
+        style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+        <option value="">All types</option>
+        <option value="movie">Movies</option>
+        <option value="tv">TV</option>
+        <option value="catalog">Catalog</option>
+        <option value="user">User requests</option>
+      </select>
+      <span id="jobFilterCount" style="font-size:11px;color:#555"></span>
+    </div>
     <div class="table-wrap">
       <table>
         <thead>

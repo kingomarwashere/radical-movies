@@ -9,6 +9,7 @@ socket.on('admin:stats', (data) => render(data));
 
 // R2 storage map: key → { size, lastModified }
 let r2Objects = new Map();
+let _lastJobs = [];
 
 async function fetchR2Objects() {
   try {
@@ -44,6 +45,7 @@ tabBtns.forEach(btn => {
 
 // ── Render ──────────────────────────────────────────────────────────────────
 function render({ jobs, streams, disk, server, seedbox }) {
+  _lastJobs = jobs;
   renderStats(jobs, streams, disk, server);
   renderHealth(seedbox || {});
   renderStreams(streams);
@@ -228,13 +230,44 @@ function timeAgo(ts) {
 }
 
 // ── Jobs ─────────────────────────────────────────────────────────────────────
+function getJobFilter() {
+  return {
+    search: (document.getElementById('jobSearch')?.value || '').toLowerCase(),
+    status: document.getElementById('jobStatusFilter')?.value || '',
+    type:   document.getElementById('jobTypeFilter')?.value || '',
+  };
+}
+
 function renderJobs(jobs) {
+  const { search, status, type } = getJobFilter();
+  let filtered = jobs;
+
+  if (search) {
+    filtered = filtered.filter(j =>
+      (j.title    || '').toLowerCase().includes(search) ||
+      (j.showTitle || '').toLowerCase().includes(search) ||
+      (j.user      || '').toLowerCase().includes(search)
+    );
+  }
+  if (status) filtered = filtered.filter(j => j.status === status);
+  if (type === 'catalog')  filtered = filtered.filter(j => j.catalog);
+  else if (type === 'user') filtered = filtered.filter(j => !j.catalog);
+  else if (type === 'movie') filtered = filtered.filter(j => j.type === 'movie');
+  else if (type === 'tv')    filtered = filtered.filter(j => j.type === 'tv');
+
+  const countEl = document.getElementById('jobFilterCount');
+  if (countEl) {
+    countEl.textContent = (search || status || type)
+      ? `${filtered.length} of ${jobs.length} jobs`
+      : `${jobs.length} jobs`;
+  }
+
   const tbody = document.getElementById('jobsTbody');
-  if (!jobs.length) {
-    tbody.innerHTML = '<tr><td colspan="12" class="empty">No jobs yet</td></tr>';
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="13" class="empty">${(search || status || type) ? 'No matching jobs' : 'No jobs yet'}</td></tr>`;
     return;
   }
-  tbody.innerHTML = jobs.map(j => {
+  tbody.innerHTML = filtered.map(j => {
     const age = Math.floor((Date.now() - j.createdAt) / 1000);
     const pct = j.progress ?? 0;
     const isDone = j.status === 'ready';
@@ -849,6 +882,11 @@ document.getElementById('btnDeleteSelected')?.addEventListener('click', async ()
   btn.textContent = '🗑 Delete Selected';
   btn.disabled = false;
   appendLog(`[LOG] Deleted ${ids.length} jobs`);
+});
+
+// Live job filtering
+['jobSearch','jobStatusFilter','jobTypeFilter'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', () => renderJobs(_lastJobs));
 });
 
 // Per-row delete + retry + checkbox change

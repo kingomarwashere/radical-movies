@@ -194,13 +194,30 @@ export async function deleteFromR2(key) {
 
 export async function listR2Objects() {
   if (!r2Configured) return [];
+  const CF_R2_BASE = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}`;
+  const headers = { 'Authorization': `Bearer ${CF_TOKEN}` };
+  const all = [];
+  let cursor = null;
+
   try {
-    const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/r2/buckets/${BUCKET}/objects?limit=1000`,
-      { headers: { 'Authorization': `Bearer ${CF_TOKEN}` } }
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.result || []).map(o => ({ key: o.key, size: o.size, lastModified: o.last_modified }));
-  } catch { return []; }
+    do {
+      const params = new URLSearchParams({ limit: '1000' });
+      if (cursor) params.set('cursor', cursor);
+      const res = await fetch(`${CF_R2_BASE}/objects?${params}`, { headers });
+      if (!res.ok) break;
+      const data = await res.json();
+
+      // Cloudflare returns result as an array (older API) or { objects: [...] } (newer)
+      const objects = Array.isArray(data.result)
+        ? data.result
+        : (data.result?.objects ?? []);
+
+      all.push(...objects.map(o => ({ key: o.key, size: o.size, lastModified: o.last_modified })));
+
+      const info = data.result_info || {};
+      cursor = info.truncated && info.cursor ? info.cursor : null;
+    } while (cursor);
+
+    return all;
+  } catch { return all; }
 }
