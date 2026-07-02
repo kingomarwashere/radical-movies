@@ -37,21 +37,27 @@ function saveCodes(c) {
   try { fs.writeFileSync(CODES_FILE, JSON.stringify(c)); } catch {}
 }
 
+const TRIAL_MS = 24 * 60 * 60 * 1000; // 1 day
+
 // ── Paid status ──────────────────────────────────────────────────────────────
 // Users created before billing was introduced have no 'paid' field — grandfather them in.
 export function isPaid(username) {
   const users = loadUsers();
   const u = users.find(x => x.username === username);
   if (!u) return false;
-  return u.paid !== false; // undefined (legacy) or true → paid
+  if (u.paid === undefined) return true;           // legacy user — grandfathered
+  if (u.paid === true)      return true;           // explicitly paid
+  if (u.trialEndsAt && Date.now() < u.trialEndsAt) return true; // in free trial
+  return false;
 }
 
 export function getPaidInfo(username) {
   const users = loadUsers();
   const u = users.find(x => x.username === username);
   if (!u) return { paid: false };
-  const paid = u.paid !== false;
-  return { paid, accessType: u.accessType || null };
+  const inTrial = !!(u.trialEndsAt && Date.now() < u.trialEndsAt && !u.paid);
+  const paid = u.paid === undefined || u.paid === true || inTrial;
+  return { paid, accessType: u.accessType || null, inTrial, trialEndsAt: u.trialEndsAt || null };
 }
 
 export function markUserPaid(username, accessType = 'stripe', extra = {}) {

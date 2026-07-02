@@ -32,6 +32,38 @@ button { cursor: pointer; font-family: var(--font); }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
 
+/* ── Trial banner ─────────────────────────────────────────────────────────── */
+.trial-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 500;
+  background: linear-gradient(to right, #1a0010, #0d0008, #1a0010);
+  border-bottom: 1px solid rgba(255,0,153,.25);
+  padding: 9px 4%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 13px;
+  color: #bbb;
+}
+.trial-banner[hidden] { display: none; }
+.trial-upgrade-link {
+  background: var(--red);
+  color: #fff;
+  padding: 4px 14px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  white-space: nowrap;
+  transition: background .2s;
+}
+.trial-upgrade-link:hover { background: var(--red2); }
+body.has-trial-banner .nav { top: 38px; }
+body.has-trial-banner .hero { padding-top: 38px; }
+
 /* ── Nav ──────────────────────────────────────────────────────────────────── */
 .nav {
   position: fixed;

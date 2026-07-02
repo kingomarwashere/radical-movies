@@ -368,8 +368,17 @@
     fetch('/api/auth/me').then(r => r.json()).then(d => {
       if (d.username) {
         document.getElementById('navUser').textContent = d.username;
-        // Already paid — shouldn't be here
-        if (d.paid) location.href = '/';
+        // Already paid (not trial) — shouldn't be here
+        if (d.paid && !d.inTrial) { location.href = '/'; return; }
+        // Show trial context if in trial
+        if (d.inTrial && d.trialEndsAt) {
+          const ms = d.trialEndsAt - Date.now();
+          const h  = Math.floor(ms / 3600000);
+          const m  = Math.floor((ms % 3600000) / 60000);
+          document.querySelector('.hero-eyebrow').textContent = `⏳ Trial ends in ${h}h ${m}m`;
+          document.querySelector('.hero-title').innerHTML = 'Keep your<br>access.';
+          document.querySelector('.hero-sub').textContent = 'Your free day is almost up. Subscribe to keep streaming with no interruptions.';
+        }
       } else {
         location.href = '/login';
       }
@@ -442,5 +451,18 @@
       if (e.key === 'Enter') document.getElementById('inviteBtn').click();
     });
   </script>
+  <!--Start of Tawk.to Script-->
+  <script type="text/javascript">
+  var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+  (function(){
+  var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+  s1.async=true;
+  s1.src='https://embed.tawk.to/6a4604034b956a1d4cbbbd06/1jsgnvbi9';
+  s1.charset='UTF-8';
+  s1.setAttribute('crossorigin','*');
+  s0.parentNode.insertBefore(s1,s0);
+  })();
+  </script>
+  <!--End of Tawk.to Script-->
 </body>
 </html>

@@ -126,9 +126,29 @@ async function checkAuth() {
     loggedInUser = data.username;
     navUsername.textContent = loggedInUser;
     if (!data.paid) { location.href = '/upgrade'; return; }
+    if (data.inTrial && data.trialEndsAt) startTrialBanner(data.trialEndsAt);
   } catch {
     location.href = '/login';
   }
+}
+
+function startTrialBanner(endsAt) {
+  const banner = $('trialBanner');
+  const text   = $('trialText');
+  if (!banner || !text) return;
+
+  function update() {
+    const ms = endsAt - Date.now();
+    if (ms <= 0) { location.href = '/upgrade'; return; }
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    text.textContent = `⏳ Free trial: ${h}h ${m}m remaining`;
+    banner.hidden = false;
+    document.body.classList.add('has-trial-banner');
+  }
+
+  update();
+  setInterval(update, 60000);
 }
 
 logoutBtn.addEventListener('click', async () => {
