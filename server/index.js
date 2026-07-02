@@ -32,6 +32,8 @@ import { isFfmpegAvailable, transcodeToMP4, fastStartMP4, getExt, needsTranscode
 import { uploadToR2, getStreamUrl, r2Configured, deleteFromR2, listR2Objects, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 import { initCatalog, syncCatalog, getCatalogItems, getCatalogStats } from './catalog.js';
 import { getUserProgress, setProgress, deleteProgress } from './progress.js';
+import { getWatchlist, addToWatchlist, removeFromWatchlist } from './watchlist.js';
+import { getRatings, setRating, removeRating } from './ratings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -183,6 +185,32 @@ app.post('/api/progress/:jobId', requireAuth, (req, res) => {
   else if (position > 0) setProgress(req.username, req.params.jobId, { position, duration, pct, title, streamUrl, posterPath });
   res.json({ ok: true });
 });
+// ── Watchlist ──────────────────────────────────────────────────────────────
+app.get('/api/watchlist', (req, res) => res.json(getWatchlist(req.username)));
+app.post('/api/watchlist', (req, res) => {
+  const { tmdbId, type, title, posterPath, year } = req.body || {};
+  if (!tmdbId || !type) return res.status(400).json({ error: 'tmdbId and type required' });
+  const added = addToWatchlist(req.username, { tmdbId, type, title, posterPath, year });
+  res.json({ ok: true, added });
+});
+app.delete('/api/watchlist/:type/:tmdbId', (req, res) => {
+  removeFromWatchlist(req.username, req.params.type, parseInt(req.params.tmdbId));
+  res.json({ ok: true });
+});
+
+// ── Ratings ────────────────────────────────────────────────────────────────
+app.get('/api/ratings', (req, res) => res.json(getRatings(req.username)));
+app.post('/api/ratings', (req, res) => {
+  const { tmdbId, type, rating } = req.body || {};
+  if (!tmdbId || !type || !rating) return res.status(400).json({ error: 'tmdbId, type, rating required' });
+  setRating(req.username, type, tmdbId, rating);
+  res.json({ ok: true });
+});
+app.delete('/api/ratings/:type/:tmdbId', (req, res) => {
+  removeRating(req.username, req.params.type, parseInt(req.params.tmdbId));
+  res.json({ ok: true });
+});
+
 app.post('/api/admin/catalog/sync', (req, res) => {
   syncCatalog().catch(e => console.error('[catalog] admin sync error:', e.message));
   res.json({ ok: true, message: 'Catalog sync started in background' });

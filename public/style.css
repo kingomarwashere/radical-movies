@@ -1468,6 +1468,90 @@ body.has-music-bar .music-bar { bottom: 0; }
   body.has-music-bar { padding-bottom: 68px; }
 }
 
+/* ── Watchlist button ─────────────────────────────────────────────────────── */
+.btn-wl {
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.18);
+  color: #aaa;
+  font-size: 14px;
+}
+.btn-wl:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.3); }
+.btn-wl.active { background: rgba(255,0,153,.12); border-color: var(--red); color: var(--red); }
+
+/* ── Star rating ──────────────────────────────────────────────────────────── */
+.modal-rating-wrap { padding: 0 32px 20px; }
+
+.star-rating-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.star-label {
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+
+.stars { display: flex; gap: 2px; }
+
+.star {
+  font-size: 24px;
+  color: #2a2a2a;
+  cursor: pointer;
+  transition: color .1s, transform .1s;
+  line-height: 1;
+  user-select: none;
+}
+.star.active { color: #f5c518; }
+.star.hover { color: rgba(245,197,24,.5); }
+.star:hover { transform: scale(1.2); color: #f5c518; }
+
+/* ── Why you'll like this ─────────────────────────────────────────────────── */
+.why-like-box {
+  margin: 0 32px 20px;
+  padding: 16px 20px;
+  background: rgba(255,255,255,.025);
+  border: 1px solid #1e1e1e;
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+}
+
+.why-like-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--red);
+  margin-bottom: 10px;
+}
+
+.why-like-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.why-like-list li {
+  font-size: 13px;
+  color: #bbb;
+  line-height: 1.5;
+  padding-left: 14px;
+  position: relative;
+}
+.why-like-list li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--red);
+}
+.why-like-list em {
+  font-style: normal;
+  color: #fff;
+  font-weight: 600;
+}
+
 /* ── Filmography view breadcrumb */
 .filmography-back {
   display: inline-flex;

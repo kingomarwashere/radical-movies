@@ -31,6 +31,9 @@ let catalogData = [];
 let _watchProgress = {};
 let _lastProgressSave = 0;
 let _currentPosterPath = null;
+let _watchlist = [];
+let _ratings = {};
+let _watchedTmdbSet = new Set();
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -425,6 +428,39 @@ async function openModal(tmdbId) {
       modalWatch.disabled = false;
       modalWatch.onclick = () => queueWatch(m);
     }
+    // Clean up previous dynamic additions
+    document.getElementById('modalWlBtn')?.remove();
+    document.getElementById('modalRatingWrap')?.remove();
+    document.getElementById('modalWhyBox')?.remove();
+
+    // Watchlist button
+    const inWl = _watchlist.some(i => i.tmdbId === m.id && i.type === 'movie');
+    const wlBtn = document.createElement('button');
+    wlBtn.id = 'modalWlBtn';
+    wlBtn.className = `btn btn-wl${inWl ? ' active' : ''}`;
+    wlBtn.textContent = inWl ? '♥ Watchlisted' : '♡ Watchlist';
+    wlBtn.addEventListener('click', () => toggleWatchlist(m.id, 'movie', m.title, m.poster_path, m.release_date?.slice(0, 4)));
+    modalActions.appendChild(wlBtn);
+
+    // Star rating
+    const ratingWrap = document.createElement('div');
+    ratingWrap.id = 'modalRatingWrap';
+    ratingWrap.className = 'modal-rating-wrap';
+    modalSimilar.before(ratingWrap);
+    renderStarRating('modalRatingWrap', 'movie', m.id);
+
+    // Why you'll like this — async, non-blocking
+    const openedId = m.id;
+    buildWhyLikeThis(m, 'movie').then(reasons => {
+      if (!reasons.length || modalWrap.hidden || currentMovie?.id !== openedId) return;
+      document.getElementById('modalWhyBox')?.remove();
+      const box = document.createElement('div');
+      box.id = 'modalWhyBox';
+      box.className = 'why-like-box';
+      box.innerHTML = `<div class="why-like-title">Why you'll like this</div><ul class="why-like-list">${reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
+      (document.getElementById('modalRatingWrap') || modalSimilar).before(box);
+    }).catch(() => {});
+
     modalWrap.hidden = false;
     document.body.style.overflow = 'hidden';
   } catch (e) {
@@ -466,6 +502,7 @@ async function openTVModal(showId) {
       year    ? `<span>${year}</span>`    : '',
       seasons ? `<span>${seasons}</span>` : '',
       rating,
+      tvStatusLabel(show.status, show.last_air_date),
       genres,
     ].filter(Boolean).join('');
 
@@ -491,6 +528,42 @@ async function openTVModal(showId) {
     } else {
       tvModalSimilar.innerHTML = '';
     }
+
+    // Clean up previous dynamic additions
+    document.getElementById('tvModalWlBtn')?.remove();
+    document.getElementById('tvModalRatingWrap')?.remove();
+    document.getElementById('tvModalWhyBox')?.remove();
+
+    // Watchlist button
+    const tvModalActionsEl = $('tvModalActions');
+    if (tvModalActionsEl) {
+      const inWlTV = _watchlist.some(i => i.tmdbId === show.id && i.type === 'tv');
+      const tvWlBtn = document.createElement('button');
+      tvWlBtn.id = 'tvModalWlBtn';
+      tvWlBtn.className = `btn btn-wl btn-lg${inWlTV ? ' active' : ''}`;
+      tvWlBtn.textContent = inWlTV ? '♥ Watchlisted' : '♡ Watchlist';
+      tvWlBtn.addEventListener('click', () => toggleWatchlist(show.id, 'tv', show.name, show.poster_path, show.first_air_date?.slice(0, 4)));
+      tvModalActionsEl.appendChild(tvWlBtn);
+    }
+
+    // Star rating
+    const tvRatingWrap = document.createElement('div');
+    tvRatingWrap.id = 'tvModalRatingWrap';
+    tvRatingWrap.className = 'modal-rating-wrap';
+    tvModalSimilar.before(tvRatingWrap);
+    renderStarRating('tvModalRatingWrap', 'tv', show.id);
+
+    // Why you'll like this — async, non-blocking
+    const openedShowId = show.id;
+    buildWhyLikeThis(show, 'tv').then(reasons => {
+      if (!reasons.length || tvModalWrap.hidden || currentShow?.id !== openedShowId) return;
+      document.getElementById('tvModalWhyBox')?.remove();
+      const box = document.createElement('div');
+      box.id = 'tvModalWhyBox';
+      box.className = 'why-like-box';
+      box.innerHTML = `<div class="why-like-title">Why you'll like this</div><ul class="why-like-list">${reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
+      (document.getElementById('tvModalRatingWrap') || tvModalSimilar).before(box);
+    }).catch(() => {});
 
     await renderSeasonTabs(show);
 
@@ -1029,6 +1102,7 @@ function startLibraryPolling() {
   fetchLibrary();
   fetchCatalog();
   loadProgress();
+  loadWatchlistAndRatings();
   libraryPollTimer = setInterval(fetchLibrary, 5000);
   setInterval(fetchCatalog, 30_000);
 }
@@ -1036,6 +1110,7 @@ function startLibraryPolling() {
 async function fetchLibrary() {
   try {
     libraryData = await fetch('/api/library').then(r => r.json());
+    updateWatchedSet();
     updateLibraryBadge();
     updateCardBadges();
     if (currentSection === 'library') renderLibraryGrid();
@@ -1800,6 +1875,184 @@ function fmtMusicTime(s) {
   const m = Math.floor(s / 60);
   const sc = Math.floor(s % 60);
   return `${m}:${String(sc).padStart(2, '0')}`;
+}
+
+// ── Watchlist & Ratings ────────────────────────────────────────────────────
+async function loadWatchlistAndRatings() {
+  try {
+    const [wl, rt] = await Promise.all([
+      fetch('/api/watchlist').then(r => r.json()),
+      fetch('/api/ratings').then(r => r.json()),
+    ]);
+    _watchlist = Array.isArray(wl) ? wl : [];
+    _ratings   = rt || {};
+    renderWatchlistRow();
+  } catch {}
+}
+
+function updateWatchedSet() {
+  _watchedTmdbSet = new Set(libraryData.filter(j => j.tmdbId).map(j => j.tmdbId));
+}
+
+function renderWatchlistRow() {
+  const row   = $('rowWatchlist');
+  const track = $('rowWatchlistTrack');
+  if (!row || !track) return;
+  if (!_watchlist.length) { row.hidden = true; return; }
+  row.hidden = false;
+  track.innerHTML = '';
+  for (const item of _watchlist.slice(0, 20)) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.tmdbId    = item.tmdbId;
+    card.dataset.mediaType = item.type;
+    card.innerHTML = `
+      <img class="card-img" src="${POSTER(item.posterPath)}" alt="${escHtml(item.title || '')}" loading="lazy">
+      <div class="card-info">
+        <div class="card-title">${escHtml(item.title || '')}</div>
+        <div class="card-meta">${item.year ? `<span>${item.year}</span>` : ''}</div>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      if (item.type === 'tv') openTVModal(item.tmdbId);
+      else openModal(item.tmdbId);
+    });
+    track.appendChild(card);
+  }
+  updateCardBadges();
+}
+
+async function toggleWatchlist(tmdbId, type, title, posterPath, year) {
+  const inWl = _watchlist.some(i => i.tmdbId === tmdbId && i.type === type);
+  if (inWl) {
+    _watchlist = _watchlist.filter(i => !(i.tmdbId === tmdbId && i.type === type));
+    await fetch(`/api/watchlist/${type}/${tmdbId}`, { method: 'DELETE' }).catch(() => {});
+    toast('Removed from watchlist');
+  } else {
+    _watchlist.unshift({ tmdbId, type, title, posterPath, year, addedAt: Date.now() });
+    await fetch('/api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tmdbId, type, title, posterPath, year }),
+    }).catch(() => {});
+    toast('Added to watchlist');
+  }
+  const nowIn = !inWl;
+  for (const id of ['modalWlBtn', 'tvModalWlBtn']) {
+    const btn = $(id);
+    if (btn) { btn.textContent = nowIn ? '♥ Watchlisted' : '♡ Watchlist'; btn.classList.toggle('active', nowIn); }
+  }
+  renderWatchlistRow();
+}
+
+function renderStarRating(containerId, type, tmdbId) {
+  const container = $(containerId);
+  if (!container) return;
+  const key     = `${type}:${tmdbId}`;
+  const current = _ratings[key]?.rating || 0;
+  container.innerHTML = `
+    <div class="star-rating-wrap">
+      <span class="star-label">Your rating</span>
+      <div class="stars">
+        ${[1,2,3,4,5].map(v => `<span class="star${current >= v ? ' active' : ''}" data-v="${v}">&#9733;</span>`).join('')}
+      </div>
+    </div>
+  `;
+  const starsEl = container.querySelector('.stars');
+  starsEl?.addEventListener('mouseleave', () => {
+    container.querySelectorAll('.star').forEach(s => s.classList.remove('hover'));
+  });
+  container.querySelectorAll('.star').forEach(star => {
+    star.addEventListener('mouseenter', () => {
+      const v = parseInt(star.dataset.v);
+      container.querySelectorAll('.star').forEach(s => s.classList.toggle('hover', parseInt(s.dataset.v) <= v));
+    });
+    star.addEventListener('click', async () => {
+      const v   = parseInt(star.dataset.v);
+      const cur = _ratings[key]?.rating;
+      if (cur === v) {
+        delete _ratings[key];
+        await fetch(`/api/ratings/${type}/${tmdbId}`, { method: 'DELETE' }).catch(() => {});
+      } else {
+        _ratings[key] = { rating: v, ratedAt: Date.now() };
+        await fetch('/api/ratings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tmdbId, type, rating: v }),
+        }).catch(() => {});
+      }
+      renderStarRating(containerId, type, tmdbId);
+    });
+  });
+}
+
+async function buildWhyLikeThis(item, mediaType) {
+  if (!_watchedTmdbSet.size) return [];
+  const reasons = [];
+
+  // Similar overlap
+  const similar = item.similar?.results ?? [];
+  for (const s of similar.slice(0, 15)) {
+    if (_watchedTmdbSet.has(s.id) && s.id !== item.id) {
+      reasons.push(`Similar to <em>${escHtml(s.title || s.name || '')}</em> in your library`);
+      break;
+    }
+  }
+
+  // Director's other films (movies only)
+  if (mediaType === 'movie') {
+    const director = item.credits?.crew?.find(c => c.job === 'Director');
+    if (director?.id) {
+      try {
+        const data = await fetch(`/api/people/${director.id}/credits`).then(r => r.json());
+        const directed = (data.crew ?? [])
+          .filter(c => c.job === 'Director' && c.media_type === 'movie' && _watchedTmdbSet.has(c.id) && c.id !== item.id)
+          .filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+          .slice(0, 2);
+        if (directed.length) {
+          const titles = directed.map(c => `<em>${escHtml(c.title || '')}</em>`).join(' and ');
+          reasons.push(`You have ${titles} in your library — also directed by ${escHtml(director.name)}`);
+        }
+      } catch {}
+    }
+  }
+
+  // Creator's other works (TV only)
+  if (mediaType === 'tv') {
+    const creator = item.created_by?.[0];
+    if (creator?.id) {
+      try {
+        const data = await fetch(`/api/people/${creator.id}/credits`).then(r => r.json());
+        const works = [...(data.cast ?? []), ...(data.crew ?? [])]
+          .filter(c => _watchedTmdbSet.has(c.id) && c.id !== item.id)
+          .filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+          .slice(0, 2);
+        if (works.length) {
+          const titles = works.map(c => `<em>${escHtml(c.title || c.name || '')}</em>`).join(' and ');
+          reasons.push(`You have ${titles} in your library — also by ${escHtml(creator.name)}`);
+        }
+      } catch {}
+    }
+  }
+
+  return reasons;
+}
+
+function tvStatusLabel(status, lastAirDate) {
+  if (!status) return '';
+  const endYear = lastAirDate ? lastAirDate.slice(0, 4) : '';
+  const map = {
+    'Returning Series': ['status-green', 'Returning'],
+    'Ended':            ['status-gray',  endYear ? `Ended ${endYear}` : 'Ended'],
+    'Canceled':         ['status-red',   'Cancelled'],
+    'In Production':    ['status-blue',  'In Production'],
+    'Planned':          ['status-blue',  'Planned'],
+    'Pilot':            ['status-gray',  'Pilot'],
+  };
+  const entry = map[status];
+  if (!entry) return '';
+  const [cls, label] = entry;
+  return `<span class="status-pill ${cls}">${escHtml(label)}</span>`;
 }
 
 // ── Go ─────────────────────────────────────────────────────────────────────
