@@ -222,11 +222,36 @@
 
   <!-- VIDEO PLAYER OVERLAY -->
   <div class="player-overlay" id="playerOverlay" hidden>
-    <div class="player-topbar">
-      <span class="player-movie-title" id="playerTitle"></span>
-      <button class="player-close" id="playerClose">✕</button>
+    <video class="player-video" id="videoEl" playsinline></video>
+    <div class="player-spinner" id="playerSpinner" hidden></div>
+    <div class="player-center-icon" id="playerCenterIcon"></div>
+    <div class="player-ui" id="playerUi">
+      <div class="player-top">
+        <span class="player-movie-title" id="playerTitle"></span>
+        <button class="player-close" id="playerClose">✕</button>
+      </div>
+      <div class="player-bottom">
+        <div class="player-scrubber" id="playerScrubber">
+          <div class="player-track">
+            <div class="player-buffered-bar" id="playerBufferedBar"></div>
+            <div class="player-seek-left" id="playerSeekLeft"></div>
+            <div class="player-handle" id="playerHandle"></div>
+          </div>
+          <div class="player-tooltip" id="playerTooltip">0:00</div>
+        </div>
+        <div class="player-row">
+          <div class="player-left">
+            <button class="player-btn" id="playerPlayBtn" title="Play / Pause (Space)"></button>
+            <button class="player-btn" id="playerMuteBtn" title="Mute (M)"></button>
+            <input type="range" class="player-vol" id="playerVolSlider" min="0" max="1" step="0.02" value="1">
+            <span class="player-time-display" id="playerTimeDisplay">0:00 / 0:00</span>
+          </div>
+          <div class="player-right">
+            <button class="player-btn" id="playerFsBtn" title="Fullscreen (F)"></button>
+          </div>
+        </div>
+      </div>
     </div>
-    <video class="player-video" id="videoEl" controls playsinline></video>
   </div>
 
   <!-- MOBILE BOTTOM TAB BAR -->

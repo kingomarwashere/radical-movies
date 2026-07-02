@@ -141,6 +141,7 @@ async function init() {
   initSocket();
   setupNav();
   setupSearch();
+  setupPlayerControls();
   startLibraryPolling();
   loadAll();
 }
@@ -674,7 +675,17 @@ function fmtEta(seconds) {
 }
 
 // ── Player ─────────────────────────────────────────────────────────────────
-let _currentStreamId = null;
+const PLAY_ICON    = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+const PAUSE_ICON   = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+const VOL_ICON     = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
+const MUTED_ICON   = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`;
+const FS_ICON      = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>`;
+const EXIT_FS_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>`;
+
+let _currentStreamId  = null;
+let _playerTogglePlay = null;
+let _playerToggleFs   = null;
+let _playerToggleMute = null;
 
 function openPlayer(streamUrl, title) {
   fetchOverlay.hidden = true;
@@ -682,12 +693,14 @@ function openPlayer(streamUrl, title) {
   playerTitle.textContent = title || '';
   videoEl.src = streamUrl;
   playerOverlay.hidden = false;
+  $('playerUi').classList.add('visible');
   videoEl.play().catch(() => {});
   _currentStreamId = Math.random().toString(36).slice(2);
   socket.emit('stream:start', { streamId: _currentStreamId, title, streamUrl, jobId: currentJobId });
 }
 
 function closePlayer() {
+  if (document.fullscreenElement) document.exitFullscreen();
   videoEl.pause();
   videoEl.src = '';
   playerOverlay.hidden = true;
@@ -696,7 +709,180 @@ function closePlayer() {
   currentJobId = null;
 }
 
-playerClose.addEventListener('click', closePlayer);
+function setupPlayerControls() {
+  const playerUi    = $('playerUi');
+  const playBtn     = $('playerPlayBtn');
+  const muteBtn     = $('playerMuteBtn');
+  const volSlider   = $('playerVolSlider');
+  const timeDisplay = $('playerTimeDisplay');
+  const scrubber    = $('playerScrubber');
+  const bufferedBar = $('playerBufferedBar');
+  const seekLeft    = $('playerSeekLeft');
+  const handle      = $('playerHandle');
+  const tooltip     = $('playerTooltip');
+  const fsBtn       = $('playerFsBtn');
+  const spinner     = $('playerSpinner');
+  const centerIcon  = $('playerCenterIcon');
+
+  let hideTimer  = null;
+  let isSeeking  = false;
+  let wasPlaying = false;
+
+  playBtn.innerHTML = PLAY_ICON;
+  muteBtn.innerHTML = VOL_ICON;
+  fsBtn.innerHTML   = FS_ICON;
+
+  // ── Auto-hide controls ───────────────────────────────────────────────────
+  function showControls() {
+    playerUi.classList.add('visible');
+    playerOverlay.style.cursor = '';
+    clearTimeout(hideTimer);
+    if (!videoEl.paused) {
+      hideTimer = setTimeout(() => {
+        playerUi.classList.remove('visible');
+        playerOverlay.style.cursor = 'none';
+      }, 3000);
+    }
+  }
+
+  playerOverlay.addEventListener('mousemove', showControls);
+  playerOverlay.addEventListener('mouseleave', () => {
+    if (!videoEl.paused) {
+      clearTimeout(hideTimer);
+      playerUi.classList.remove('visible');
+      playerOverlay.style.cursor = 'none';
+    }
+  });
+
+  // Click video area to toggle play/pause
+  playerOverlay.addEventListener('click', (e) => {
+    if (e.target.closest('.player-top') || e.target.closest('.player-bottom')) return;
+    showControls();
+    _playerTogglePlay();
+  });
+
+  // ── Play / Pause ─────────────────────────────────────────────────────────
+  _playerTogglePlay = () => {
+    if (videoEl.paused) { videoEl.play().catch(() => {}); flashCenter(PLAY_ICON); }
+    else                { videoEl.pause();                flashCenter(PAUSE_ICON); }
+    showControls();
+  };
+  playBtn.addEventListener('click', _playerTogglePlay);
+  playerClose.addEventListener('click', closePlayer);
+
+  videoEl.addEventListener('play', () => { playBtn.innerHTML = PAUSE_ICON; showControls(); });
+  videoEl.addEventListener('pause', () => {
+    playBtn.innerHTML = PLAY_ICON;
+    clearTimeout(hideTimer);
+    playerUi.classList.add('visible');
+    playerOverlay.style.cursor = '';
+  });
+
+  // ── Center flash icon ─────────────────────────────────────────────────────
+  function flashCenter(svg) {
+    centerIcon.innerHTML = svg;
+    centerIcon.classList.remove('flash');
+    void centerIcon.offsetWidth;
+    centerIcon.classList.add('flash');
+  }
+
+  // ── Volume / Mute ─────────────────────────────────────────────────────────
+  function syncVolIcon() {
+    muteBtn.innerHTML = (videoEl.muted || videoEl.volume === 0) ? MUTED_ICON : VOL_ICON;
+  }
+  _playerToggleMute = () => { videoEl.muted = !videoEl.muted; syncVolIcon(); };
+  muteBtn.addEventListener('click', _playerToggleMute);
+  volSlider.addEventListener('input', () => {
+    videoEl.volume = parseFloat(volSlider.value);
+    videoEl.muted  = videoEl.volume === 0;
+    syncVolIcon();
+  });
+  videoEl.addEventListener('volumechange', () => { volSlider.value = videoEl.volume; syncVolIcon(); });
+
+  // ── Time & scrubber ───────────────────────────────────────────────────────
+  function fmt(s) {
+    if (!isFinite(s)) return '0:00';
+    const h  = Math.floor(s / 3600);
+    const m  = Math.floor((s % 3600) / 60);
+    const sc = Math.floor(s % 60);
+    return h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}`
+      : `${m}:${String(sc).padStart(2,'0')}`;
+  }
+
+  videoEl.addEventListener('timeupdate', () => {
+    if (!isSeeking) {
+      const pct = videoEl.duration ? (videoEl.currentTime / videoEl.duration) * 100 : 0;
+      seekLeft.style.width    = `${pct}%`;
+      handle.style.left       = `${pct}%`;
+      timeDisplay.textContent = `${fmt(videoEl.currentTime)} / ${fmt(videoEl.duration)}`;
+    }
+    syncBuffered();
+  });
+  videoEl.addEventListener('progress', syncBuffered);
+
+  function syncBuffered() {
+    if (!videoEl.duration) return;
+    let end = 0;
+    for (let i = 0; i < videoEl.buffered.length; i++) {
+      if (videoEl.buffered.start(i) <= videoEl.currentTime + 1)
+        end = Math.max(end, videoEl.buffered.end(i));
+    }
+    bufferedBar.style.width = `${(end / videoEl.duration) * 100}%`;
+  }
+
+  // ── Scrubber drag ─────────────────────────────────────────────────────────
+  function getSeekPct(e) {
+    const r = scrubber.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  }
+
+  scrubber.addEventListener('mousemove', (e) => {
+    const r   = scrubber.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    tooltip.textContent = fmt(pct * (videoEl.duration || 0));
+    tooltip.style.left  = `${pct * r.width}px`;
+    tooltip.classList.add('visible');
+  });
+  scrubber.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
+
+  scrubber.addEventListener('mousedown', (e) => {
+    isSeeking  = true;
+    wasPlaying = !videoEl.paused;
+    videoEl.pause();
+    applySeek(e);
+    document.addEventListener('mousemove', applySeek);
+    document.addEventListener('mouseup', endSeek, { once: true });
+  });
+
+  function applySeek(e) {
+    const pct = getSeekPct(e);
+    seekLeft.style.width = `${pct * 100}%`;
+    handle.style.left    = `${pct * 100}%`;
+    if (videoEl.duration) videoEl.currentTime = pct * videoEl.duration;
+  }
+
+  function endSeek() {
+    isSeeking = false;
+    document.removeEventListener('mousemove', applySeek);
+    if (wasPlaying) videoEl.play().catch(() => {});
+  }
+
+  // ── Fullscreen ────────────────────────────────────────────────────────────
+  _playerToggleFs = () => {
+    if (!document.fullscreenElement) playerOverlay.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  };
+  fsBtn.addEventListener('click', _playerToggleFs);
+  document.addEventListener('fullscreenchange', () => {
+    fsBtn.innerHTML = document.fullscreenElement ? EXIT_FS_ICON : FS_ICON;
+  });
+
+  // ── Spinner ───────────────────────────────────────────────────────────────
+  videoEl.addEventListener('waiting', () => { spinner.hidden = false; });
+  videoEl.addEventListener('canplay', () => { spinner.hidden = true; });
+  videoEl.addEventListener('playing', () => { spinner.hidden = true; });
+}
 
 // ── Library polling ────────────────────────────────────────────────────────
 function startLibraryPolling() {
@@ -918,8 +1104,20 @@ function setupSearch() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!playerOverlay.hidden) {
+      switch (e.key) {
+        case 'Escape':   closePlayer(); break;
+        case ' ': case 'k': e.preventDefault(); _playerTogglePlay?.(); break;
+        case 'f': case 'F': _playerToggleFs?.(); break;
+        case 'm': case 'M': _playerToggleMute?.(); break;
+        case 'ArrowLeft':  e.preventDefault(); videoEl.currentTime = Math.max(0, videoEl.currentTime - 10); break;
+        case 'ArrowRight': e.preventDefault(); if (videoEl.duration) videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 10); break;
+        case 'ArrowUp':    e.preventDefault(); videoEl.volume = Math.min(1, videoEl.volume + 0.1); break;
+        case 'ArrowDown':  e.preventDefault(); videoEl.volume = Math.max(0, videoEl.volume - 0.1); break;
+      }
+      return;
+    }
     if (e.key === 'Escape') {
-      if (!playerOverlay.hidden) { closePlayer(); return; }
       if (!fetchOverlay.hidden) {
         stopCountdown(); fetchOverlay.hidden = true;
         document.body.style.overflow = ''; return;
