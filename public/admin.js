@@ -37,7 +37,8 @@ tabBtns.forEach(btn => {
       pane.hidden = key !== btn.dataset.tab;
     });
     if (btn.dataset.tab === 'codes') fetchCodes();
-    if (btn.dataset.tab === 'music') fetchMusicAdmin();
+    if (btn.dataset.tab === 'music') { fetchMusicAdmin(); startMusicAdminPolling(); }
+    else stopMusicAdminPolling();
   });
 });
 
@@ -530,26 +531,67 @@ document.getElementById('codesTbody')?.addEventListener('click', async (e) => {
 const musicStatusColor = { ready:'var(--green)', downloading:'var(--yellow)', pending:'#888', error:'var(--red)', empty:'#555' };
 let _selectedAlbum = null; // iTunes album currently selected
 
+let _musicPollTimer = null;
+
+function startMusicAdminPolling() {
+  stopMusicAdminPolling();
+  _musicPollTimer = setInterval(fetchMusicAdmin, 4000);
+}
+function stopMusicAdminPolling() {
+  clearInterval(_musicPollTimer);
+  _musicPollTimer = null;
+}
+
+// Live socket updates for in-progress albums
+socket.on('music:update', (album) => {
+  if (document.getElementById('tab-music')?.hidden) return;
+  const row = document.querySelector(`tr[data-music-id="${album.id}"]`);
+  if (!row) { fetchMusicAdmin(); return; } // new album, refresh whole table
+  const statusCell = row.querySelector('.music-status-cell');
+  if (statusCell) {
+    const col = musicStatusColor[album.status] || '#888';
+    statusCell.innerHTML = `
+      <span style="color:${col};font-size:12px;font-weight:700">${album.status}</span>
+      ${album.message ? `<div class="muted" style="font-size:10px;margin-top:2px">${esc(album.message.slice(0,90))}</div>` : ''}
+      ${album.status === 'downloading' && album.progress ? `
+        <div style="height:3px;background:#222;border-radius:2px;margin-top:4px;overflow:hidden">
+          <div style="height:100%;background:var(--yellow);border-radius:2px;width:${album.progress}%;transition:width .5s"></div>
+        </div>` : ''}`;
+    if (album.status === 'ready' || album.status === 'error') fetchMusicAdmin();
+  }
+});
+
 async function fetchMusicAdmin() {
   try {
     const albums = await fetch('/api/admin/music/albums').then(r => r.json());
     const tbody  = document.getElementById('musicAlbumsTbody');
     if (!tbody) return;
     if (!albums.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No albums yet — search above to add one</td></tr>'; return; }
+
+    // Join socket rooms for in-progress albums
+    albums.filter(a => !['ready','error','empty'].includes(a.status))
+          .forEach(a => socket.emit('music:join', a.id));
+
     tbody.innerHTML = albums.map(a => {
       const col    = musicStatusColor[a.status] || '#888';
       const tracks = a.tracks?.length || 0;
-      const retry  = a.status === 'error' ? `<button class="btn btn-ghost btn-sm" data-music-retry="${esc(a.id)}" style="color:var(--yellow)">↺</button>` : '';
-      return `<tr>
+      const retry  = a.status === 'error' ? `<button class="btn btn-ghost btn-sm" data-music-retry="${esc(a.id)}" style="color:var(--yellow)" title="Retry">↺</button>` : '';
+      const reqBy  = a.requestedBy ? `<span class="muted" style="font-size:10px">${esc(a.requestedBy)}</span>` : '';
+      const prog   = a.status === 'downloading' && a.progress
+        ? `<div style="height:3px;background:#222;border-radius:2px;margin-top:4px;overflow:hidden">
+             <div style="height:100%;background:var(--yellow);border-radius:2px;width:${a.progress}%;transition:width .5s"></div>
+           </div>` : '';
+      return `<tr data-music-id="${esc(a.id)}">
         <td>${esc(a.artist)}</td>
-        <td>${esc(a.album)}</td>
+        <td>${esc(a.album)}<br>${reqBy}</td>
         <td class="muted" style="font-size:11px">${a.year || '—'}</td>
         <td class="muted" style="font-size:11px">${tracks || '—'}</td>
-        <td>
+        <td class="music-status-cell">
           <span style="color:${col};font-size:12px;font-weight:700">${a.status}</span>
-          ${a.message ? `<div class="muted" style="font-size:10px;margin-top:2px">${esc(a.message.slice(0,80))}</div>` : ''}
+          ${a.message ? `<div class="muted" style="font-size:10px;margin-top:2px">${esc(a.message.slice(0,90))}</div>` : ''}
+          ${prog}
         </td>
-        <td style="display:flex;gap:4px">
+        <td style="display:flex;gap:4px;align-items:center">
           ${retry}
           <button class="btn btn-ghost btn-sm" style="color:var(--red)" data-music-del="${esc(a.id)}">✕</button>
         </td>

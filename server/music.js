@@ -8,7 +8,7 @@ import {
   getSeedboxSavePath, deleteSeedboxDir,
   findAudioFiles, probeAudioMeta, convertAudioOnSeedbox, extractCoverArtOnSeedbox,
 } from './seedbox.js';
-import { getStreamUrl } from './r2.js';
+import { getStreamUrl, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
 import { getUsers, updateUser } from './auth.js';
 import { searchTLMusic } from './torrentleech.js';
 import { searchTPBMusic } from './piratebay.js';
@@ -61,8 +61,8 @@ function slugify(str) {
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 export async function runMusicPipeline(albumId, _io = null) {
-  const UPLOAD_URL    = process.env.UPLOAD_URL    || process.env.R2_STREAM_URL;
-  const UPLOAD_SECRET = process.env.UPLOAD_SECRET || '';
+  const uploadUrl    = `${UPLOAD_URL}/upload`;
+  const uploadSecret = UPLOAD_SECRET;
 
   function patch(update) {
     const catalog = loadCatalog();
@@ -109,7 +109,7 @@ export async function runMusicPipeline(albumId, _io = null) {
   if (!coverUrl) {
     patch({ message: 'Extracting cover art…' });
     const coverKey = `music/${albumId}/cover.jpg`;
-    const ok = await extractCoverArtOnSeedbox(audioFiles[0].path, UPLOAD_URL, UPLOAD_SECRET, coverKey);
+    const ok = await extractCoverArtOnSeedbox(audioFiles[0].path, uploadUrl, uploadSecret, coverKey);
     if (ok) {
       coverUrl = getStreamUrl(coverKey);
       patch({ coverUrl });
@@ -140,7 +140,7 @@ export async function runMusicPipeline(albumId, _io = null) {
 
     const r2Key = `music/${albumId}/${disc}-${String(track).padStart(2,'0')}-${slugify(title)}.mp3`;
     await convertAudioOnSeedbox(
-      file.path, file.size, UPLOAD_URL, UPLOAD_SECRET, r2Key,
+      file.path, file.size, uploadUrl, uploadSecret, r2Key,
       (pct) => patch({ message: `Track ${i + 1}/${audioFiles.length} — ${pct}%` })
     );
 
