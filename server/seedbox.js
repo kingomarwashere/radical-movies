@@ -320,6 +320,32 @@ export async function waitForTorrent(hash, onProgress, timeoutMs = 30 * 60 * 100
   throw new Error('Seedbox download timed out after 30 minutes');
 }
 
+// Seed until ratio >= 1.0 or 24h, whichever comes first, then delete.
+// Runs in the background — call without await so the pipeline returns immediately.
+export async function seedUntilDone(hash, label = '') {
+  const MAX_MS   = 24 * 60 * 60 * 1000; // 24 hours
+  const TARGET   = 1.0;
+  const POLL     = 60 * 1000;            // check every 60s
+  const start    = Date.now();
+
+  console.log(`[seed] waiting for ratio ≥${TARGET} on ${label || hash}`);
+  while (Date.now() - start < MAX_MS) {
+    await sleep(POLL);
+    try {
+      const t = await getTorrentByHash(hash);
+      if (!t) { console.log(`[seed] torrent gone: ${label || hash}`); return; }
+      console.log(`[seed] ${label || t.name} ratio=${t.ratio?.toFixed(3)} up=${(t.uploaded/1e9).toFixed(2)}GB`);
+      if ((t.ratio ?? 0) >= TARGET) {
+        console.log(`[seed] ratio target hit — deleting ${label || t.name}`);
+        break;
+      }
+    } catch (e) {
+      console.warn(`[seed] poll error: ${e.message}`);
+    }
+  }
+  await deleteTorrent(hash, true).catch(e => console.warn(`[seed] delete failed: ${e.message}`));
+}
+
 export async function deleteTorrent(hash, deleteFiles = true) {
   const form = new FormData();
   form.append('hashes', hash.toLowerCase());

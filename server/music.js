@@ -4,8 +4,8 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 
 import {
-  seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
-  getSeedboxSavePath, deleteSeedboxDir,
+  seedboxConfigured, addTorrent, waitForTorrent, seedUntilDone,
+  getSeedboxSavePath,
   findAudioFiles, probeAudioMeta, convertAudioOnSeedbox, extractCoverArtOnSeedbox,
 } from './seedbox.js';
 import { getStreamUrl, UPLOAD_URL, UPLOAD_SECRET } from './r2.js';
@@ -96,8 +96,6 @@ export async function runMusicPipeline(albumId, _io = null) {
     patch({ status: 'downloading', progress, message: `Downloading ${progress}% @ ${speed}` });
   });
 
-  deleteTorrent(hash, false).catch(() => {});
-
   patch({ message: 'Scanning audio files…' });
   const audioFiles = await findAudioFiles(`music-${albumId}`, hash);
   if (!audioFiles.length) throw new Error('No audio files found in torrent');
@@ -159,7 +157,8 @@ export async function runMusicPipeline(albumId, _io = null) {
     artist:   album.artist || tracks[0]?.artist || 'Unknown Artist',
   });
 
-  deleteSeedboxDir(sbPath).catch(() => {});
+  // Seed until ratio ≥ 1.0 or 24h before deleting — fires in background
+  seedUntilDone(hash, `${album.artist} — ${album.album}`).catch(() => {});
   console.log(`[music] album ready: ${album.artist} — ${album.album} (${tracks.length} tracks)`);
 }
 

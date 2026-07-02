@@ -19,7 +19,7 @@ import { searchTPB, searchTPBEpisode } from './piratebay.js';
 import { searchTL, searchTLEpisode } from './torrentleech.js';
 import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
-  seedboxConfigured, addTorrent, waitForTorrent, deleteTorrent,
+  seedboxConfigured, addTorrent, waitForTorrent, seedUntilDone,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
   remuxOnSeedbox, transcodeOnSeedbox, transcodeVideoOnSeedbox,
   probeRemoteAudioCodec, probeRemoteFileAudio, probeRemoteCodecs,
@@ -626,10 +626,7 @@ async function runPipeline(jobId) {
       emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
       const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
 
-      // Free the qBit slot after we have the path — avoids race where torrent is
-      // deleted before findVideoFile can look up the actual save path via qBit API
-      // Remove from qBit queue (frees slot) but keep files on disk — ffmpeg still needs them
-      if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
+      // Keep torrent seeding in qBit while ffmpeg processes — seedUntilDone handles cleanup after
 
       if (r2Configured) {
         const remoteExt = path.extname(remoteVideoPath).toLowerCase();
@@ -688,8 +685,8 @@ async function runPipeline(jobId) {
           decSeedboxOps();
         }
         trackBandwidth(remoteFileSize);
-        // Delete source files from seedbox NOW (after ffmpeg is done with them)
-        deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
+        // Seed until ratio ≥ 1.0 or 24h, then delete — fires in background
+        if (torrentHash) seedUntilDone(torrentHash, job.title).catch(e => console.warn('[seedbox] seedUntilDone failed:', e.message));
 
         job.status    = 'ready';
         job.readyAt   = Date.now();
