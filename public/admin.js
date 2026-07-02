@@ -1,3 +1,12 @@
+// Intercept all /api/admin/ fetches to include the admin key header
+const _origFetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  if (typeof url === 'string' && url.startsWith('/api/admin')) {
+    opts = { ...opts, headers: { ...opts.headers, 'x-admin-key': localStorage.getItem('adminKey') || '' } };
+  }
+  return _origFetch(url, opts);
+};
+
 const socket = io({ transports: ['polling'] });
 const connDot = document.getElementById('connDot');
 
