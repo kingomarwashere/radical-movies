@@ -707,11 +707,14 @@ async function runPipeline(jobId) {
         job._rawPath = localPath;
       }
     } catch (sbErr) {
-      // Seedbox unavailable (502, cooldown, login failure) — fall back to WebTorrent
+      // WebTorrent fallback disabled — re-enable by restoring the commented block below
+      throw sbErr;
+      /* FALLBACK (disabled):
       const isDown = /502|unavailable|cooldown|login failed/i.test(sbErr.message);
       if (!isDown) throw sbErr;
       console.warn(`[pipeline] seedbox unavailable — WebTorrent fallback (${sbErr.message.slice(0, 80)})`);
       emit({ message: 'Seedbox unavailable — downloading directly (slower)…' });
+      */
     }
   }
 
