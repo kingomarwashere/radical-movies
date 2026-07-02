@@ -118,7 +118,7 @@ const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|jap
 
 // Strip apostrophes for search queries — trackers index "Shadows Edge" not "Shadow's Edge".
 // makeTitleRe still makes apostrophes optional so the filter step matches either form.
-function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/\s+/g, ' ').trim(); }
+function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/[*!?#@$%^&+=|<>{}[\]\\]/g, '').replace(/\s+/g, ' ').trim(); }
 
 // Title words must appear in order with only separators between them.
 // "The Boys" → /the[.\s_\-]+boys/i — matches "The.Boys.S04E01" but NOT "The.Invisible.Boys".

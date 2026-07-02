@@ -42,7 +42,7 @@ function isNotCam(t) {
 const FOREIGN_RE = /\b(italian|french|spanish|german|portuguese|dutch|korean|japanese|chinese|turkish|swedish|norwegian|danish|finnish|polish|russian|romanian|hungarian|czech|slovak|ita|fre|spa|ger|por|dut|kor|jpn|chi|tur|swe|nor|dan|pol|rus|rum|hun|cze)\b/i;
 function isEnglish(t) { return !FOREIGN_RE.test(t.name); }
 
-function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/\s+/g, ' ').trim(); }
+function cleanQuery(s) { return s.replace(/[''`]/g, '').replace(/[*!?#@$%^&+=|<>{}[\]\\]/g, '').replace(/\s+/g, ' ').trim(); }
 
 function makeTitleRe(title) {
   const words = title.toLowerCase().split(/\s+/).filter(Boolean);

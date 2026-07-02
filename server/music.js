@@ -13,11 +13,21 @@ import { getUsers, updateUser } from './auth.js';
 import { searchTLMusic } from './torrentleech.js';
 import { searchTPBMusic } from './piratebay.js';
 
+function cleanAlbumForSearch(album) {
+  return album
+    .replace(/\s*[-–]\s*(Single|EP)$/i, '')
+    .replace(/\s*\((Expanded|Deluxe|Super Deluxe|Anniversary|Remaster(ed)?|Re-?issue|Special|Collector'?s?|Bonus Track[s]?)[^)]*\)/gi, '')
+    .replace(/[*]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function findMusicTorrent(artist, album) {
-  console.log(`[music] searching torrent: "${artist} — ${album}"`);
+  const searchAlbum = cleanAlbumForSearch(album);
+  console.log(`[music] searching torrent: "${artist} — ${searchAlbum}"${searchAlbum !== album ? ` (cleaned from "${album}")` : ''}`);
   const result =
-    await searchTLMusic(artist, album).catch(e => { console.error('[tl-music]', e.message); return null; }) ||
-    await searchTPBMusic(artist, album).catch(e => { console.error('[tpb-music]', e.message); return null; });
+    await searchTLMusic(artist, searchAlbum).catch(e => { console.error('[tl-music]', e.message); return null; }) ||
+    await searchTPBMusic(artist, searchAlbum).catch(e => { console.error('[tpb-music]', e.message); return null; });
   if (!result) throw new Error(`No torrent found for "${artist} — ${album}"`);
   console.log(`[music] torrent found via ${result.source}: ${result.title} (${result.quality}, ${result.seeds} seeds)`);
   return result;
@@ -79,7 +89,8 @@ export async function runMusicPipeline(albumId, _io = null) {
   if (!album) throw new Error('Album not found');
 
   // Auto-find torrent if not provided by admin
-  let torrentSource = album.torrentSource;
+  // 'auto' is a marker meaning "was auto-found last time" — not a real source, re-search on retry
+  let torrentSource = album.torrentSource === 'auto' ? null : album.torrentSource;
   if (!torrentSource) {
     patch({ status: 'searching', message: `Searching for "${album.artist} — ${album.album}"…` });
     const torrent = await findMusicTorrent(album.artist, album.album);
@@ -94,7 +105,7 @@ export async function runMusicPipeline(albumId, _io = null) {
 
   await waitForTorrent(hash, ({ progress, speed }) => {
     patch({ status: 'downloading', progress, message: `Downloading ${progress}% @ ${speed}` });
-  });
+  }, 90 * 60 * 1000);
 
   patch({ message: 'Scanning audio files…' });
   const audioFiles = await findAudioFiles(`music-${albumId}`, hash);
