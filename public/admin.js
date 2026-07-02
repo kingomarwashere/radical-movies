@@ -26,6 +26,7 @@ const tabPanes = {
   users:    document.getElementById('tab-users'),
   jobs:     document.getElementById('tab-jobs'),
   codes:    document.getElementById('tab-codes'),
+  music:    document.getElementById('tab-music'),
   log:      document.getElementById('tab-log'),
 };
 
@@ -36,6 +37,7 @@ tabBtns.forEach(btn => {
       pane.hidden = key !== btn.dataset.tab;
     });
     if (btn.dataset.tab === 'codes') fetchCodes();
+    if (btn.dataset.tab === 'music') fetchMusicAdmin();
   });
 });
 
@@ -507,6 +509,103 @@ document.getElementById('codesTbody')?.addEventListener('click', async (e) => {
   if (del) {
     await fetch(`/api/admin/invite-codes/${encodeURIComponent(del.dataset.delCode)}`, { method: 'DELETE' });
     fetchCodes();
+  }
+});
+
+// ── Music Admin ───────────────────────────────────────────────────────────────
+const musicStatusColor = { ready:'var(--green)', downloading:'var(--yellow)', pending:'#888', error:'var(--red)', empty:'#555' };
+
+async function fetchMusicAdmin() {
+  try {
+    const [albums, { enabled }] = await Promise.all([
+      fetch('/api/admin/music/albums').then(r => r.json()),
+      fetch('/api/music/enabled').then(r => r.json()),
+    ]);
+    const label = document.getElementById('musicEnabledLabel');
+    if (label) {
+      label.textContent = enabled ? '● Enabled for users' : '○ Disabled';
+      label.style.color = enabled ? 'var(--green)' : '#555';
+    }
+    const tbody = document.getElementById('musicAlbumsTbody');
+    if (!tbody) return;
+    if (!albums.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No albums — add one above</td></tr>'; return; }
+    tbody.innerHTML = albums.map(a => {
+      const statusColor = musicStatusColor[a.status] || '#888';
+      const tracks = a.tracks?.length || 0;
+      const retryBtn = a.status === 'error'
+        ? `<button class="btn btn-ghost btn-sm" data-music-retry="${esc(a.id)}" style="color:var(--yellow)">↺</button>` : '';
+      const delBtn = `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-music-del="${esc(a.id)}">✕</button>`;
+      return `<tr>
+        <td>${esc(a.artist)}</td>
+        <td>${esc(a.album)}</td>
+        <td class="muted" style="font-size:11px">${a.year || '—'}</td>
+        <td class="muted" style="font-size:11px">${tracks || '—'}</td>
+        <td>
+          <span style="color:${statusColor};font-size:12px;font-weight:700">${a.status}</span>
+          ${a.message ? `<div class="muted" style="font-size:10px;margin-top:2px">${esc(a.message.slice(0,80))}</div>` : ''}
+        </td>
+        <td style="display:flex;gap:4px">${retryBtn}${delBtn}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) { appendLog(`[ERR] fetchMusicAdmin: ${e.message}`); }
+}
+
+document.getElementById('btnMusicToggle')?.addEventListener('click', async () => {
+  await fetch('/api/admin/music/toggle', { method: 'POST' });
+  fetchMusicAdmin();
+});
+
+document.getElementById('btnAddAlbum')?.addEventListener('click', () => {
+  const form = document.getElementById('addAlbumForm');
+  form.hidden = !form.hidden;
+});
+document.getElementById('btnCancelAlbum')?.addEventListener('click', () => {
+  document.getElementById('addAlbumForm').hidden = true;
+});
+
+document.getElementById('btnCreateAlbum')?.addEventListener('click', async () => {
+  const artist     = document.getElementById('albumArtist').value.trim();
+  const album      = document.getElementById('albumName').value.trim();
+  const year       = document.getElementById('albumYear').value.trim();
+  const torrentSource = document.getElementById('albumMagnet').value.trim();
+  const coverUrl   = document.getElementById('albumCoverUrl').value.trim();
+  if (!artist || !album) { appendLog('[ERR] Artist and album name required'); return; }
+
+  const btn = document.getElementById('btnCreateAlbum');
+  btn.textContent = 'Adding…'; btn.disabled = true;
+
+  const res = await fetch('/api/admin/music/album', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artist, album, year: year ? parseInt(year) : null, torrentSource, coverUrl }),
+  });
+  const data = await res.json();
+  btn.textContent = 'Add Album'; btn.disabled = false;
+
+  if (res.ok) {
+    appendLog(`[LOG] Album added: ${artist} — ${album} (${data.albumId})`);
+    ['albumArtist','albumName','albumYear','albumMagnet','albumCoverUrl'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('addAlbumForm').hidden = true;
+    fetchMusicAdmin();
+  } else {
+    appendLog(`[ERR] Add album failed: ${data.error}`);
+  }
+});
+
+document.getElementById('musicAlbumsTbody')?.addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-music-del]');
+  if (del) {
+    await fetch(`/api/admin/music/album/${del.dataset.musicDel}`, { method: 'DELETE' });
+    fetchMusicAdmin();
+    return;
+  }
+  const retry = e.target.closest('[data-music-retry]');
+  if (retry) {
+    await fetch(`/api/admin/music/album/${retry.dataset.musicRetry}/retry`, { method: 'POST' });
+    appendLog(`[LOG] Retrying music pipeline for ${retry.dataset.musicRetry}`);
+    fetchMusicAdmin();
   }
 });
 

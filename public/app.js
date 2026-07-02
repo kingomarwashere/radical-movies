@@ -169,6 +169,7 @@ async function init() {
   setupPlayerControls();
   startLibraryPolling();
   loadAll();
+  initMusic();
 }
 
 async function loadAll() {
@@ -1154,6 +1155,7 @@ function setupSearch() {
         stopCountdown(); fetchOverlay.hidden = true;
         document.body.style.overflow = ''; return;
       }
+      if (!document.getElementById('musicModalWrap').hidden) { closeMusicModal(); return; }
       if (!tvModalWrap.hidden) { closeTVModal(); return; }
       if (!modalWrap.hidden)   { closeModal();   return; }
     }
@@ -1316,13 +1318,17 @@ function switchSection(section) {
   rows.hidden           = section !== 'home';
   tvRows.hidden         = section !== 'tv';
   librarySection.hidden = section !== 'library';
+  const musicSec = document.getElementById('musicSection');
+  if (musicSec) musicSec.hidden = section !== 'music';
   window.scrollTo(0, 0);
 
-  searchInput.placeholder = 'Search movies & TV shows…';
+  searchInput.placeholder = section === 'music' ? 'Search music…' : 'Search movies & TV shows…';
   if (section === 'tv') {
     loadTVRows();
   } else if (section === 'library') {
     fetchLibrary();
+  } else if (section === 'music') {
+    loadMusicSection();
   }
 }
 
@@ -1338,6 +1344,167 @@ function toast(msg, ms = 4000) {
 // ── Util ───────────────────────────────────────────────────────────────────
 function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Music ──────────────────────────────────────────────────────────────────
+let _musicCatalog   = [];
+let _musicQueue     = [];
+let _musicQueueIdx  = 0;
+let _musicAlbum     = null;
+const musicAudio    = document.getElementById('musicAudio');
+const musicBar      = document.getElementById('musicBar');
+const musicBarArt   = document.getElementById('musicBarArt');
+const musicBarTitle = document.getElementById('musicBarTitle');
+const musicBarArtist = document.getElementById('musicBarArtist');
+const musicBarPlay  = document.getElementById('musicBarPlay');
+const musicBarFill  = document.getElementById('musicBarFill');
+const musicBarProgressWrap = document.getElementById('musicBarProgressWrap');
+
+async function initMusic() {
+  try {
+    const { enabled } = await fetch('/api/music/enabled').then(r => r.json());
+    if (!enabled) return;
+    document.querySelectorAll('.music-nav').forEach(el => el.hidden = false);
+  } catch {}
+}
+
+async function loadMusicSection() {
+  const grid = document.getElementById('musicGrid');
+  if (!grid) return;
+  grid.innerHTML = '<p style="color:#555;padding:20px 0">Loading…</p>';
+  try {
+    _musicCatalog = await fetch('/api/music/catalog').then(r => r.json());
+    if (!_musicCatalog.length) {
+      grid.innerHTML = '<p style="color:#555;padding:20px 0">No albums yet.</p>';
+      return;
+    }
+    grid.innerHTML = '';
+    for (const album of _musicCatalog) {
+      const card = document.createElement('div');
+      card.className = 'music-card';
+      const artHtml = album.coverUrl
+        ? `<img class="music-card-art" src="${escHtml(album.coverUrl)}" alt="" loading="lazy">`
+        : `<div class="music-card-art-placeholder">♪</div>`;
+      card.innerHTML = `
+        ${artHtml}
+        <div class="music-card-body">
+          <div class="music-card-album">${escHtml(album.album)}</div>
+          <div class="music-card-artist">${escHtml(album.artist)}</div>
+        </div>`;
+      card.addEventListener('click', () => openMusicAlbum(album));
+      grid.appendChild(card);
+    }
+  } catch {
+    grid.innerHTML = '<p style="color:#555;padding:20px 0">Failed to load music.</p>';
+  }
+}
+
+function openMusicAlbum(album) {
+  _musicAlbum = album;
+  const wrap = document.getElementById('musicModalWrap');
+  const hero = document.getElementById('musicModalHero');
+  const info = document.getElementById('musicModalInfo');
+  const list = document.getElementById('musicTrackList');
+
+  hero.src = album.coverUrl || '';
+  hero.style.display = album.coverUrl ? 'block' : 'none';
+
+  info.innerHTML = `
+    <div class="music-modal-album">${escHtml(album.album)}</div>
+    <div class="music-modal-artist">${escHtml(album.artist)}</div>
+    <div class="music-modal-meta">${album.year || ''} · ${album.tracks.length} tracks</div>`;
+
+  list.innerHTML = '';
+  album.tracks.forEach((track, i) => {
+    const el = document.createElement('div');
+    el.className = 'music-track';
+    el.dataset.idx = i;
+    el.innerHTML = `
+      <div class="music-track-n">${track.n}</div>
+      <div class="music-track-title">${escHtml(track.title)}</div>
+      <div class="music-track-dur">${fmtMusicTime(track.duration)}</div>`;
+    el.addEventListener('click', () => playMusicFrom(album.tracks, i, album));
+    list.appendChild(el);
+  });
+
+  wrap.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+
+function closeMusicModal() {
+  document.getElementById('musicModalWrap').hidden = true;
+  document.body.style.overflow = '';
+}
+
+document.getElementById('musicModalClose')?.addEventListener('click', closeMusicModal);
+document.getElementById('musicModalBackdrop')?.addEventListener('click', closeMusicModal);
+
+function playMusicFrom(tracks, idx, album) {
+  _musicQueue    = tracks;
+  _musicQueueIdx = idx;
+  _musicAlbum    = album;
+  playCurrentTrack();
+}
+
+function playCurrentTrack() {
+  const track  = _musicQueue[_musicQueueIdx];
+  const album  = _musicAlbum;
+  if (!track) return;
+
+  musicAudio.src = track.url;
+  musicAudio.play().catch(() => {});
+
+  musicBarTitle.textContent  = track.title;
+  musicBarArtist.textContent = album?.artist || '';
+  musicBarArt.src            = album?.coverUrl || '';
+  musicBarArt.style.display  = album?.coverUrl ? 'block' : 'none';
+  musicBarPlay.textContent   = '⏸';
+  musicBar.hidden            = false;
+  document.body.classList.add('has-music-bar');
+
+  // Highlight playing track in modal
+  document.querySelectorAll('.music-track').forEach(el => {
+    el.classList.toggle('playing', parseInt(el.dataset.idx) === _musicQueueIdx);
+  });
+}
+
+musicAudio?.addEventListener('ended', () => {
+  if (_musicQueueIdx < _musicQueue.length - 1) {
+    _musicQueueIdx++;
+    playCurrentTrack();
+  } else {
+    musicBarPlay.textContent = '▶';
+  }
+});
+musicAudio?.addEventListener('play',  () => { musicBarPlay.textContent = '⏸'; });
+musicAudio?.addEventListener('pause', () => { musicBarPlay.textContent = '▶'; });
+musicAudio?.addEventListener('timeupdate', () => {
+  const pct = musicAudio.duration ? (musicAudio.currentTime / musicAudio.duration) * 100 : 0;
+  musicBarFill.style.width = `${pct}%`;
+});
+
+musicBarPlay?.addEventListener('click', () => {
+  if (musicAudio.paused) musicAudio.play().catch(() => {});
+  else musicAudio.pause();
+});
+musicBarProgressWrap?.addEventListener('click', (e) => {
+  const r   = musicBarProgressWrap.getBoundingClientRect();
+  const pct = (e.clientX - r.left) / r.width;
+  if (musicAudio.duration) musicAudio.currentTime = pct * musicAudio.duration;
+});
+document.getElementById('musicBarPrev')?.addEventListener('click', () => {
+  if (musicAudio.currentTime > 3) { musicAudio.currentTime = 0; return; }
+  if (_musicQueueIdx > 0) { _musicQueueIdx--; playCurrentTrack(); }
+});
+document.getElementById('musicBarNext')?.addEventListener('click', () => {
+  if (_musicQueueIdx < _musicQueue.length - 1) { _musicQueueIdx++; playCurrentTrack(); }
+});
+
+function fmtMusicTime(s) {
+  if (!s) return '';
+  const m = Math.floor(s / 60);
+  const sc = Math.floor(s % 60);
+  return `${m}:${String(sc).padStart(2, '0')}`;
 }
 
 // ── Go ─────────────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@
     <div class="nav-links">
       <span class="nav-link active" data-section="home">Movies</span>
       <span class="nav-link" data-section="tv">TV Shows</span>
+      <span class="nav-link music-nav" data-section="music" hidden>Music</span>
       <span class="nav-link" data-section="library">Library <span class="lib-badge" id="libBadge" hidden>0</span></span>
     </div>
     <div class="nav-right">
@@ -148,6 +149,11 @@
       </section>
     </div>
 
+    <!-- Music Section -->
+    <div id="musicSection" hidden>
+      <div class="music-grid" id="musicGrid"></div>
+    </div>
+
     <!-- TV Show Rows -->
     <div id="tvRows" hidden>
       <section class="row row-ready" id="rowReadyTV" hidden>
@@ -260,6 +266,37 @@
     </div>
   </div>
 
+  <!-- MUSIC ALBUM MODAL -->
+  <div class="music-modal-wrap" id="musicModalWrap" hidden>
+    <div class="music-modal-backdrop" id="musicModalBackdrop"></div>
+    <div class="music-modal" id="musicModal">
+      <button class="modal-close" id="musicModalClose">✕</button>
+      <div class="music-modal-hero" id="musicModalHero"></div>
+      <div class="music-modal-info" id="musicModalInfo"></div>
+      <div class="music-track-list" id="musicTrackList"></div>
+    </div>
+  </div>
+
+  <!-- MUSIC PLAYER BAR -->
+  <div class="music-bar" id="musicBar" hidden>
+    <img class="music-bar-art" id="musicBarArt" src="" alt="">
+    <div class="music-bar-info">
+      <div class="music-bar-title" id="musicBarTitle"></div>
+      <div class="music-bar-artist" id="musicBarArtist"></div>
+    </div>
+    <div class="music-bar-controls">
+      <button class="music-bar-btn" id="musicBarPrev" title="Previous">⏮</button>
+      <button class="music-bar-btn music-bar-play" id="musicBarPlay" title="Play/Pause">▶</button>
+      <button class="music-bar-btn" id="musicBarNext" title="Next">⏭</button>
+    </div>
+    <div class="music-bar-progress-wrap" id="musicBarProgressWrap">
+      <div class="music-bar-progress">
+        <div class="music-bar-fill" id="musicBarFill"></div>
+      </div>
+    </div>
+    <audio id="musicAudio"></audio>
+  </div>
+
   <!-- MOBILE BOTTOM TAB BAR -->
   <nav class="bottom-nav" id="bottomNav">
     <button class="bottom-tab active" data-section="home">
@@ -269,6 +306,10 @@
     <button class="bottom-tab" data-section="tv">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
       <span>TV Shows</span>
+    </button>
+    <button class="bottom-tab music-nav" data-section="music" hidden>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+      <span>Music</span>
     </button>
     <button class="bottom-tab" data-section="library">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z"/></svg>

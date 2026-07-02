@@ -12,6 +12,7 @@ import { spawn } from 'child_process';
 
 import { authRoutes, requireAuth, getUsers, deleteUser } from './auth.js';
 import { billingRoutes, handleWebhook, isPaid } from './billing.js';
+import { musicRoutes, getSetting } from './music.js';
 import * as tmdb from './tmdb.js';
 import { searchYTS } from './yts.js';
 import { searchTPB, searchTPBEpisode } from './piratebay.js';
@@ -78,6 +79,7 @@ app.get('/login',   (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html
 app.get('/upgrade', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'upgrade.html')));
 authRoutes(app);
 billingRoutes(app, { requireAuth });
+musicRoutes(app, { requireAuth });
 
 // All API and socket routes require auth
 app.use((req, res, next) => {

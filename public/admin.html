@@ -293,6 +293,7 @@
   <button class="tab-btn" data-tab="users">Users<span class="tab-badge" id="usersBadge" hidden>0</span></button>
   <button class="tab-btn" data-tab="jobs">Jobs</button>
   <button class="tab-btn" data-tab="codes">Invite Codes</button>
+  <button class="tab-btn" data-tab="music">Music</button>
   <button class="tab-btn" data-tab="log">Log</button>
 </div>
 
@@ -490,6 +491,39 @@
     </div>
   </div>
 </div><!-- /tab-jobs -->
+
+<!-- ═══════════ TAB: MUSIC ═══════════ -->
+<div id="tab-music" hidden>
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Music</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="muted" style="font-size:11px" id="musicEnabledLabel">—</span>
+        <button class="btn btn-ghost btn-sm" id="btnMusicToggle">Toggle On/Off</button>
+        <button class="btn btn-ghost btn-sm" style="border-color:#22c55e;color:#22c55e" id="btnAddAlbum">+ Add Album</button>
+      </div>
+    </div>
+    <div id="addAlbumForm" hidden style="margin-bottom:20px;padding:16px;background:#0d0d0d;border:1px solid #1e1e1e;border-radius:8px;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="albumArtist" placeholder="Artist *" style="flex:1;min-width:140px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+        <input id="albumName"   placeholder="Album name *" style="flex:1;min-width:160px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+        <input id="albumYear"   placeholder="Year" type="number" style="width:80px;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+      </div>
+      <input id="albumMagnet"   placeholder="Magnet or torrent URL" style="width:100%;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+      <input id="albumCoverUrl" placeholder="Cover art URL (optional — auto-extracted if blank)" style="width:100%;padding:7px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" id="btnCreateAlbum" style="border-color:#22c55e;color:#22c55e">Add Album</button>
+        <button class="btn btn-ghost btn-sm" id="btnCancelAlbum">Cancel</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Artist</th><th>Album</th><th>Year</th><th>Tracks</th><th>Status</th><th></th></tr></thead>
+        <tbody id="musicAlbumsTbody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════ TAB: LOG ═══════════ -->
 <div id="tab-log" hidden>

@@ -1177,3 +1177,229 @@ export function getSeedboxSavePath(jobId) {
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
+
+// ── Audio helpers ─────────────────────────────────────────────────────────────
+const AUDIO_EXTS = new Set(['.mp3','.flac','.m4a','.aac','.ogg','.wav','.opus','.ape','.wma','.alac']);
+
+async function listAudioRecursive(sftp, dirPath) {
+  const results = [];
+  let entries;
+  try { entries = await sftp.list(dirPath); } catch { return results; }
+  for (const e of entries) {
+    const full = dirPath.replace(/\/$/, '') + '/' + e.name;
+    if (e.type === 'd' && e.name !== '.' && e.name !== '..') {
+      results.push(...await listAudioRecursive(sftp, full));
+    } else if (AUDIO_EXTS.has(path.extname(e.name).toLowerCase())) {
+      results.push({ path: full, name: e.name, size: e.size });
+    }
+  }
+  return results;
+}
+
+export async function findAudioFiles(jobId, torrentHash) {
+  const sftp = new SftpClient();
+  try {
+    await sftp.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+    let saveDir = getSeedboxSavePath(jobId);
+    if (torrentHash) {
+      const list = await qbtJson(`/torrents/info?hashes=${torrentHash}`);
+      if (list[0]) {
+        const cp = (list[0].content_path || '').replace(/\/$/, '');
+        const sp = (list[0].save_path    || '').replace(/\/$/, '');
+        const isFile = cp && path.extname(cp).length > 0;
+        saveDir = (isFile ? path.dirname(cp) : cp) || sp || saveDir;
+      }
+    }
+    const files = await listAudioRecursive(sftp, saveDir);
+    // Sort naturally by filename (handles "01 - Track.flac" etc.)
+    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    return files;
+  } finally {
+    await sftp.end().catch(() => {});
+  }
+}
+
+// Probe audio file metadata via ffprobe on the seedbox
+export async function probeAudioMeta(remotePath) {
+  return new Promise((resolve) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      const cmd = `ffprobe -v quiet -print_format json -show_format -show_streams ${JSON.stringify(remotePath)} 2>/dev/null`;
+      conn.exec(cmd, (err, stream) => {
+        if (err) { conn.end(); return resolve({}); }
+        let out = '';
+        stream.stdout.on('data', d => { out += d; });
+        stream.on('close', () => {
+          conn.end();
+          try {
+            const p    = JSON.parse(out);
+            const tags = { ...(p.format?.tags || {}), ...(p.streams?.[0]?.tags || {}) };
+            const getTag = (...keys) => {
+              for (const k of keys) {
+                const v = tags[k] || tags[k.toUpperCase()] || tags[k.toLowerCase()];
+                if (v) return String(v).trim();
+              }
+              return null;
+            };
+            const trackRaw = getTag('track');
+            const discRaw  = getTag('disc', 'disk');
+            resolve({
+              title:    getTag('title'),
+              artist:   getTag('artist', 'albumartist'),
+              album:    getTag('album'),
+              track:    trackRaw ? parseInt(trackRaw.split('/')[0]) || 0 : 0,
+              disc:     discRaw  ? parseInt(discRaw.split('/')[0])  || 1 : 1,
+              duration: Math.round(parseFloat(p.format?.duration) || 0),
+            });
+          } catch { resolve({}); }
+        });
+      });
+    });
+    conn.on('error', () => resolve({}));
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
+
+// Convert any audio file to MP3 320kbps on the seedbox and upload to R2
+export function convertAudioOnSeedbox(remotePath, fileSize, uploadUrl, secret, r2Key, onProgress) {
+  const CHUNK = 32 * 1024 * 1024;
+  const ext   = path.extname(remotePath).toLowerCase();
+
+  const py = `
+import sys, json, subprocess, os
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+
+FILE   = ${JSON.stringify(remotePath)}
+KEY    = ${JSON.stringify(r2Key)}
+MIME   = 'audio/mpeg'
+BASE   = ${JSON.stringify(uploadUrl)}
+SECRET = ${JSON.stringify(secret)}
+CHUNK  = ${CHUNK}
+TMPOUT = '/tmp/radical-audio-' + str(os.getpid()) + '.mp3'
+
+def api(action, extra='', method='GET', data=None, ct=None):
+    url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
+    h = {'x-upload-secret': SECRET, 'User-Agent': 'radical/1.0'}
+    if ct: h['content-type'] = ct
+    with urlopen(Request(url, data=data, method=method, headers=h), timeout=300) as r:
+        return json.loads(r.read())
+
+sys.stdout.write(json.dumps({'phase':'encode'})+'\\n'); sys.stdout.flush()
+
+ext = os.path.splitext(FILE)[1].lower()
+if ext == '.mp3':
+    cmd = ['ffmpeg','-loglevel','error','-i',FILE,'-c:a','copy','-y',TMPOUT]
+else:
+    cmd = ['ffmpeg','-loglevel','error','-i',FILE,'-vn','-c:a','libmp3lame','-q:a','0','-y',TMPOUT]
+
+proc = subprocess.run(cmd, capture_output=True)
+if proc.returncode != 0:
+    sys.stdout.write(json.dumps({'error':proc.stderr.decode(errors='replace')[-400:]})+'\\n')
+    sys.exit(1)
+
+sys.stdout.write(json.dumps({'phase':'upload'})+'\\n'); sys.stdout.flush()
+size = os.path.getsize(TMPOUT)
+r    = api('create','&contentType='+MIME,method='POST')
+uid  = r['uploadId']
+parts = []
+pn    = 0
+up    = 0
+with open(TMPOUT,'rb') as f:
+    while True:
+        chunk = f.read(CHUNK)
+        if not chunk: break
+        pn += 1
+        r = api('part','&uploadId='+uid+'&partNumber='+str(pn),method='PUT',data=chunk,ct='application/octet-stream')
+        parts.append({'partNumber':pn,'etag':r['etag']})
+        up += len(chunk)
+        sys.stdout.write(json.dumps({'pct':min(99,int(up/size*100))})+'\\n'); sys.stdout.flush()
+api('complete','&uploadId='+uid,method='POST',data=json.dumps(parts).encode(),ct='application/json')
+if os.path.exists(TMPOUT): os.unlink(TMPOUT)
+sys.stdout.write(json.dumps({'done':True})+'\\n')
+`;
+
+  const pyB64 = Buffer.from(py).toString('base64');
+  return new Promise((resolve, reject) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`echo '${pyB64}' | base64 -d | python3`, (err, stream) => {
+        if (err) { conn.end(); return reject(err); }
+        let errOut = '';
+        stream.stdout.on('data', d => {
+          for (const line of d.toString().split('\n')) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.error)  { errOut = msg.error; }
+              if (msg.pct)    onProgress?.(msg.pct);
+              if (msg.done)   {}
+            } catch {}
+          }
+        });
+        stream.stderr.on('data', d => { errOut += d.toString(); });
+        stream.on('close', code => {
+          conn.end();
+          if (code !== 0) reject(new Error(`audio convert failed: ${errOut.slice(-300)}`));
+          else resolve();
+        });
+      });
+    });
+    conn.on('error', reject);
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
+
+// Extract embedded cover art from an audio file on the seedbox and upload to R2
+export function extractCoverArtOnSeedbox(audioPath, uploadUrl, secret, r2Key) {
+  const py = `
+import sys, json, subprocess, os
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+
+FILE   = ${JSON.stringify(audioPath)}
+KEY    = ${JSON.stringify(r2Key)}
+BASE   = ${JSON.stringify(uploadUrl)}
+SECRET = ${JSON.stringify(secret)}
+TMPOUT = '/tmp/radical-cover-' + str(os.getpid()) + '.jpg'
+
+def api(action, extra='', method='GET', data=None, ct=None):
+    url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
+    h = {'x-upload-secret': SECRET, 'User-Agent': 'radical/1.0'}
+    if ct: h['content-type'] = ct
+    with urlopen(Request(url, data=data, method=method, headers=h), timeout=120) as r:
+        return json.loads(r.read())
+
+proc = subprocess.run(
+    ['ffmpeg','-loglevel','error','-i',FILE,'-an','-vcodec','copy','-y',TMPOUT],
+    capture_output=True
+)
+if proc.returncode != 0 or not os.path.exists(TMPOUT):
+    sys.stdout.write(json.dumps({'error':'no cover art'})+'\\n'); sys.exit(0)
+
+size = os.path.getsize(TMPOUT)
+r    = api('create','&contentType=image/jpeg',method='POST')
+uid  = r['uploadId']
+with open(TMPOUT,'rb') as f:
+    data = f.read()
+r = api('part','&uploadId='+r['uploadId']+'&partNumber=1',method='PUT',data=data,ct='application/octet-stream')
+api('complete','&uploadId='+uid,method='POST',data=json.dumps([{'partNumber':1,'etag':r['etag']}]).encode(),ct='application/json')
+if os.path.exists(TMPOUT): os.unlink(TMPOUT)
+sys.stdout.write(json.dumps({'done':True})+'\\n')
+`;
+  const pyB64 = Buffer.from(py).toString('base64');
+  return new Promise((resolve) => { // best-effort, never throw
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`echo '${pyB64}' | base64 -d | python3`, (err, stream) => {
+        if (err) { conn.end(); return resolve(false); }
+        let ok = false;
+        stream.stdout.on('data', d => { try { if (JSON.parse(d.toString()).done) ok = true; } catch {} });
+        stream.stderr.on('data', () => {});
+        stream.on('close', () => { conn.end(); resolve(ok); });
+      });
+    });
+    conn.on('error', () => resolve(false));
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
