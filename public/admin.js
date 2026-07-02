@@ -440,24 +440,21 @@ async function fetchCodes() {
     const tbody = document.getElementById('codesTbody');
     if (!codes.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No codes yet — click Generate Code to create one</td></tr>'; return; }
     tbody.innerHTML = codes.map(c => {
-      const used    = !!c.usedBy;
-      const status  = used
-        ? `<span style="color:#22c55e;font-weight:700">✓ Used</span>`
-        : `<span style="color:#f59e0b;font-weight:700">Unused</span>`;
-      const usedBy  = used ? `<span class="mono">${esc(c.usedBy)}</span>` : '—';
+      const active  = c.active !== false;
+      const uses    = c.uses || 0;
+      const usesStr = c.maxUses ? `${uses} / ${c.maxUses}` : `${uses}`;
       const created = c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '—';
-      const copyBtn = `<button class="btn btn-ghost btn-sm" data-copy-code="${esc(c.code)}" title="Copy">⎘</button>`;
-      const delBtn  = !used
-        ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-code="${esc(c.code)}" title="Delete">✕</button>`
-        : '';
-      return `<tr>
+      const copyBtn   = `<button class="btn btn-ghost btn-sm" data-copy-code="${esc(c.code)}" title="Copy code">⎘</button>`;
+      const toggleBtn = `<button class="btn btn-ghost btn-sm" data-toggle-code="${esc(c.code)}" title="${active ? 'Disable' : 'Enable'}" style="color:${active ? 'var(--green)' : '#555'}">${active ? '●' : '○'}</button>`;
+      const delBtn    = `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-del-code="${esc(c.code)}" title="Delete">✕</button>`;
+      return `<tr style="${active ? '' : 'opacity:.45'}">
         <td><strong class="mono" style="letter-spacing:1px;color:#ff0099">${esc(c.code)}</strong></td>
         <td class="muted" style="font-size:11px">${esc(c.notes || '—')}</td>
         <td style="font-size:11px">${fmtCodeDuration(c.durationMs)}</td>
-        <td>${status}</td>
-        <td>${usedBy}</td>
+        <td class="mono" style="font-size:12px">${usesStr}</td>
+        <td style="font-size:11px">${active ? '<span style="color:var(--green)">Active</span>' : '<span class="muted">Off</span>'}</td>
         <td class="muted mono" style="font-size:11px">${created}</td>
-        <td style="display:flex;gap:4px">${copyBtn}${delBtn}</td>
+        <td style="display:flex;gap:4px">${copyBtn}${toggleBtn}${delBtn}</td>
       </tr>`;
     }).join('');
   } catch (e) { appendLog(`[ERR] fetchCodes: ${e.message}`); }
@@ -472,10 +469,11 @@ document.getElementById('btnCreateCode')?.addEventListener('click', async () => 
   const code       = document.getElementById('codeInput').value.trim().toUpperCase();
   const notes      = document.getElementById('codeNotes').value.trim();
   const durationMs = parseInt(document.getElementById('codeDuration').value) || null;
+  const maxUses    = parseInt(document.getElementById('codeMaxUses').value)  || null;
   const res = await fetch('/api/admin/invite-codes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: code || undefined, notes, durationMs }),
+    body: JSON.stringify({ code: code || undefined, notes, durationMs, maxUses }),
   });
   const data = await res.json();
   if (res.ok) {
@@ -483,6 +481,7 @@ document.getElementById('btnCreateCode')?.addEventListener('click', async () => 
     document.getElementById('codeInput').value    = '';
     document.getElementById('codeNotes').value    = '';
     document.getElementById('codeDuration').value = '';
+    document.getElementById('codeMaxUses').value  = '';
     document.getElementById('codeCreateForm').hidden = true;
     fetchCodes();
   } else {
@@ -496,6 +495,12 @@ document.getElementById('codesTbody')?.addEventListener('click', async (e) => {
     await navigator.clipboard.writeText(copy.dataset.copyCode).catch(() => {});
     const orig = copy.textContent;
     copy.textContent = '✓'; setTimeout(() => { copy.textContent = orig; }, 1200);
+    return;
+  }
+  const toggle = e.target.closest('[data-toggle-code]');
+  if (toggle) {
+    await fetch(`/api/admin/invite-codes/${encodeURIComponent(toggle.dataset.toggleCode)}`, { method: 'PATCH' });
+    fetchCodes();
     return;
   }
   const del = e.target.closest('[data-del-code]');

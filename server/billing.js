@@ -187,17 +187,26 @@ export function billingRoutes(app, { requireAuth }) {
     res.redirect('/');
   });
 
-  // Redeem invite code
+  // Redeem invite code — multi-use: any number of users can redeem the same code
   app.post('/api/billing/redeem', requireAuth, (req, res) => {
     const code = req.body?.code?.trim();
     if (!code) return res.status(400).json({ error: 'Code required' });
 
     const codes = loadCodes();
-    const entry = codes.find(c => c.code.toLowerCase() === code.toLowerCase() && !c.usedBy);
-    if (!entry) return res.status(400).json({ error: 'Invalid or already used code' });
+    const entry = codes.find(c => c.code.toLowerCase() === code.toLowerCase() && c.active !== false);
+    if (!entry) return res.status(400).json({ error: 'Invalid or inactive code' });
 
-    entry.usedBy = req.username;
-    entry.usedAt = Date.now();
+    // Enforce optional cap
+    const uses = entry.uses || 0;
+    if (entry.maxUses && uses >= entry.maxUses) {
+      return res.status(400).json({ error: 'This code has reached its usage limit' });
+    }
+
+    // Track usage count and log redemptions
+    entry.uses = uses + 1;
+    entry.lastUsedAt = Date.now();
+    if (!entry.redemptions) entry.redemptions = [];
+    entry.redemptions.push({ username: req.username, at: Date.now() });
     saveCodes(codes);
 
     const accessExpiresAt = entry.durationMs ? Date.now() + entry.durationMs : null;
@@ -209,22 +218,33 @@ export function billingRoutes(app, { requireAuth }) {
   app.get('/api/admin/invite-codes', requireAuth, (_req, res) => res.json(loadCodes()));
 
   app.post('/api/admin/invite-codes', requireAuth, (req, res) => {
-    const { code, notes, durationMs } = req.body || {};
+    const { code, notes, durationMs, maxUses } = req.body || {};
     const newCode = code?.trim().toUpperCase() || genCode();
     const codes = loadCodes();
     if (codes.find(c => c.code.toLowerCase() === newCode.toLowerCase())) {
       return res.status(409).json({ error: 'Code already exists' });
     }
     codes.push({
-      code: newCode,
-      notes: notes || '',
-      durationMs: durationMs || null, // null = lifetime
+      code:      newCode,
+      notes:     notes || '',
+      durationMs: durationMs || null,
+      maxUses:   maxUses || null, // null = unlimited
+      uses:      0,
+      active:    true,
       createdAt: Date.now(),
-      usedBy: null,
-      usedAt: null,
     });
     saveCodes(codes);
     res.json({ ok: true, code: newCode });
+  });
+
+  // Toggle active/inactive
+  app.patch('/api/admin/invite-codes/:code', requireAuth, (req, res) => {
+    const codes = loadCodes();
+    const entry = codes.find(c => c.code === req.params.code);
+    if (!entry) return res.status(404).json({ error: 'Not found' });
+    entry.active = !entry.active;
+    saveCodes(codes);
+    res.json({ ok: true, active: entry.active });
   });
 
   app.delete('/api/admin/invite-codes/:code', requireAuth, (req, res) => {
