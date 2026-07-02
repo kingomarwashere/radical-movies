@@ -1537,8 +1537,22 @@ body.has-trial-banner .hero { padding-top: 38px; }
   body.has-music-bar { padding-bottom: calc(60px + 68px); }
 }
 body.has-music-bar .music-bar { bottom: 0; }
+@media (max-width: 768px) {
+  /* sit above the mobile bottom nav bar */
+  body.has-music-bar .music-bar { bottom: 60px; }
+}
 @media (min-width: 769px) {
   body.has-music-bar { padding-bottom: 68px; }
+}
+
+/* Push Tawk.to chat widget above the music bar */
+body.has-music-bar #tawkchat-container {
+  bottom: 68px !important;
+}
+@media (max-width: 768px) {
+  body.has-music-bar #tawkchat-container {
+    bottom: 128px !important; /* above music bar (68) + bottom nav (60) */
+  }
 }
 
 /* ── Watchlist button ─────────────────────────────────────────────────────── */
