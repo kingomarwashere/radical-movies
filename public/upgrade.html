@@ -347,27 +347,6 @@
 
   </div>
 
-  <!-- $1 intro offer -->
-  <div style="width:100%;max-width:720px;padding:0 20px 36px">
-    <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:24px 28px">
-      <div style="font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#f59e0b;margin-bottom:12px">Try it first</div>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="font-size:28px;font-weight:900;color:#fff">$1</div>
-        <div style="font-size:13px;color:#777">for your first</div>
-        <select id="introPeriod" style="padding:8px 12px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:'Roboto Mono',monospace;font-size:13px;border-radius:6px;outline:none;cursor:pointer">
-          <option value="7days">7 days</option>
-          <option value="1month" selected>1 month</option>
-          <option value="3month">3 months</option>
-          <option value="6month">6 months</option>
-          <option value="1year">1 year</option>
-        </select>
-        <div style="font-size:13px;color:#555">then $15/mo</div>
-        <button class="plan-btn plan-btn-fill" id="btnIntro" style="padding:10px 24px;font-size:13px;white-space:nowrap;margin-left:auto">Start for $1 →</button>
-      </div>
-      <div style="font-size:11px;color:#444;margin-top:12px">No commitment — cancel before trial ends and pay nothing more. Card required to start.</div>
-    </div>
-  </div>
-
   <div class="divider">or use an invite code</div>
 
   <div class="invite-wrap">
@@ -445,25 +424,6 @@
 
     document.getElementById('btnMonthly').addEventListener('click', () => checkout('monthly'));
     document.getElementById('btnAnnual').addEventListener('click',  () => checkout('annual'));
-    document.getElementById('btnIntro').addEventListener('click', async () => {
-      const period = document.getElementById('introPeriod').value;
-      const btn = document.getElementById('btnIntro');
-      btn.textContent = 'Redirecting…'; btn.disabled = true;
-      setFeedback('');
-      try {
-        const res = await fetch('/api/billing/checkout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan: 'intro', introPeriod: period }),
-        });
-        const data = await res.json();
-        if (!res.ok) { setFeedback(data.error || 'Something went wrong', 'error'); btn.textContent = 'Start for $1 →'; btn.disabled = false; return; }
-        location.href = data.url;
-      } catch {
-        setFeedback('Network error — please try again', 'error');
-        btn.textContent = 'Start for $1 →'; btn.disabled = false;
-      }
-    });
 
     // Invite code
     document.getElementById('inviteBtn').addEventListener('click', async () => {

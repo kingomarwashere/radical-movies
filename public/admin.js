@@ -423,7 +423,7 @@ document.getElementById('btnCreateUser')?.addEventListener('click', async () => 
 });
 
 // ── Invite Codes ─────────────────────────────────────────────────────────────
-function fmtDuration(ms) {
+function fmtCodeDuration(ms) {
   if (!ms) return '<span class="muted">Lifetime</span>';
   const days = Math.round(ms / 86400000);
   if (days === 7)   return '7 days';
@@ -431,7 +431,7 @@ function fmtDuration(ms) {
   if (days === 90)  return '3 months';
   if (days === 180) return '6 months';
   if (days === 365) return '1 year';
-  return `${days} days`;
+  return `${days}d`;
 }
 
 async function fetchCodes() {
@@ -453,7 +453,7 @@ async function fetchCodes() {
       return `<tr>
         <td><strong class="mono" style="letter-spacing:1px;color:#ff0099">${esc(c.code)}</strong></td>
         <td class="muted" style="font-size:11px">${esc(c.notes || '—')}</td>
-        <td style="font-size:11px">${fmtDuration(c.durationMs)}</td>
+        <td style="font-size:11px">${fmtCodeDuration(c.durationMs)}</td>
         <td>${status}</td>
         <td>${usedBy}</td>
         <td class="muted mono" style="font-size:11px">${created}</td>
