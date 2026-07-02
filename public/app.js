@@ -92,6 +92,36 @@ function initSocket() {
     if (currentJobId) socket.emit('watch:join', currentJobId);
   });
 
+  socket.on('music:update', (album) => {
+    // Update catalog entry
+    const idx = _musicCatalog.findIndex(a => a.id === album.id);
+    if (idx >= 0) _musicCatalog[idx] = { ..._musicCatalog[idx], ...album };
+    else _musicCatalog.push(album);
+
+    // Update card badge in grid
+    const card = document.querySelector(`.music-card[data-album-id="${album.id}"]`);
+    if (card) {
+      const badge = card.querySelector('.music-card-badge');
+      const b = getMusicBadge(album);
+      if (b && badge) badge.textContent = b;
+      else if (b && !badge) {
+        const el = document.createElement('div');
+        el.className = 'music-card-badge'; el.textContent = b;
+        card.appendChild(el);
+      } else if (!b && badge) badge.remove();
+    }
+
+    // Update modal status if open
+    const statusEl = document.getElementById('musicModalStatus');
+    if (statusEl && _musicAlbum?.id === album.id) {
+      statusEl.textContent = album.message || album.status;
+      if (album.status === 'ready') {
+        closeMusicModal();
+        openMusicAlbum(_musicCatalog.find(a => a.id === album.id));
+      }
+    }
+  });
+
   socket.on('job:update', (job) => {
     if (job.id !== currentJobId) return;
     updateFetchUI(job);
@@ -1363,36 +1393,125 @@ const musicBarProgressWrap = document.getElementById('musicBarProgressWrap');
 function initMusic(musicEnabled) {
   if (!musicEnabled) return;
   document.querySelectorAll('.music-nav').forEach(el => el.hidden = false);
+
+  let musicSearchDebounce;
+  const musicInput = document.getElementById('musicSearchInput');
+  const musicBtn   = document.getElementById('musicSearchBtn');
+  const musicClear = document.getElementById('musicSearchClear');
+
+  const doSearch = () => {
+    const q = musicInput?.value.trim();
+    if (!q) return;
+    musicClear.hidden = false;
+    doMusicSearch(q);
+  };
+
+  musicBtn?.addEventListener('click', doSearch);
+  musicInput?.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  musicClear?.addEventListener('click', () => {
+    if (musicInput) musicInput.value = '';
+    musicClear.hidden = true;
+    renderMusicGrid(_musicCatalog);
+  });
 }
 
 async function loadMusicSection() {
-  const grid = document.getElementById('musicGrid');
-  if (!grid) return;
-  grid.innerHTML = '<p style="color:#555;padding:20px 0">Loading…</p>';
+  await fetchMusicCatalog();
+  renderMusicGrid(_musicCatalog);
+}
+
+async function fetchMusicCatalog() {
   try {
     _musicCatalog = await fetch('/api/music/catalog').then(r => r.json());
-    if (!_musicCatalog.length) {
-      grid.innerHTML = '<p style="color:#555;padding:20px 0">No albums yet.</p>';
-      return;
+    // Subscribe to socket updates for in-progress albums
+    for (const a of _musicCatalog) {
+      if (a.status !== 'ready') socket.emit('music:join', a.id);
     }
+  } catch {}
+}
+
+function renderMusicGrid(albums) {
+  const grid = document.getElementById('musicGrid');
+  if (!grid) return;
+  if (!albums.length) {
+    grid.innerHTML = '<p style="color:#555;padding:20px 0">No music yet — search for an album to add it.</p>';
+    return;
+  }
+  grid.innerHTML = '';
+  for (const album of albums) {
+    grid.appendChild(createMusicCard(album));
+  }
+}
+
+function createMusicCard(album) {
+  const card = document.createElement('div');
+  card.className = 'music-card';
+  card.dataset.albumId = album.id;
+  const artHtml = album.coverUrl
+    ? `<img class="music-card-art" src="${escHtml(album.coverUrl)}" alt="" loading="lazy">`
+    : `<div class="music-card-art-placeholder">♪</div>`;
+  const badge = getMusicBadge(album);
+  card.innerHTML = `
+    ${artHtml}
+    ${badge ? `<div class="music-card-badge">${badge}</div>` : ''}
+    <div class="music-card-body">
+      <div class="music-card-album">${escHtml(album.album)}</div>
+      <div class="music-card-artist">${escHtml(album.artist)}</div>
+    </div>`;
+  card.addEventListener('click', () => openMusicAlbum(album));
+  return card;
+}
+
+function getMusicBadge(album) {
+  if (album.status === 'ready')       return '▶';
+  if (album.status === 'downloading') return `↓ ${album.progress || 0}%`;
+  if (album.status === 'searching')   return '⌛';
+  if (album.status === 'error')       return '✗';
+  return null;
+}
+
+// iTunes search for users
+async function musicSearch(q) {
+  const url = `https://itunes.apple.com/search?${new URLSearchParams({ term: q, media: 'music', entity: 'album', limit: 30 })}`;
+  const results = await fetch(url).then(r => r.json()).then(d => d.results || []);
+  return results;
+}
+
+async function doMusicSearch(q) {
+  const grid = document.getElementById('musicGrid');
+  if (!grid) return;
+  grid.innerHTML = '<p style="color:#555;padding:20px 0">Searching…</p>';
+  try {
+    const results = await musicSearch(q);
+    if (!results.length) { grid.innerHTML = '<p style="color:#555;padding:20px 0">No results found.</p>'; return; }
+
     grid.innerHTML = '';
-    for (const album of _musicCatalog) {
-      const card = document.createElement('div');
-      card.className = 'music-card';
-      const artHtml = album.coverUrl
-        ? `<img class="music-card-art" src="${escHtml(album.coverUrl)}" alt="" loading="lazy">`
-        : `<div class="music-card-art-placeholder">♪</div>`;
-      card.innerHTML = `
-        ${artHtml}
-        <div class="music-card-body">
-          <div class="music-card-album">${escHtml(album.album)}</div>
-          <div class="music-card-artist">${escHtml(album.artist)}</div>
-        </div>`;
-      card.addEventListener('click', () => openMusicAlbum(album));
-      grid.appendChild(card);
+    for (const r of results) {
+      const itunesId = r.collectionId;
+      // Check if already in our catalog
+      const inCatalog = _musicCatalog.find(a => a.itunesId === String(itunesId));
+      const artUrl    = (r.artworkUrl100 || '').replace('100x100', '600x600');
+      const year      = r.releaseDate ? new Date(r.releaseDate).getFullYear() : null;
+
+      if (inCatalog) {
+        // Show catalog card
+        grid.appendChild(createMusicCard(inCatalog));
+      } else {
+        // Show iTunes result card with Add button
+        const card = document.createElement('div');
+        card.className = 'music-card';
+        card.innerHTML = `
+          ${artUrl ? `<img class="music-card-art" src="${escHtml(artUrl)}" alt="" loading="lazy">` : `<div class="music-card-art-placeholder">♪</div>`}
+          <div class="music-card-body">
+            <div class="music-card-album">${escHtml(r.collectionName)}</div>
+            <div class="music-card-artist">${escHtml(r.artistName)}</div>
+          </div>`;
+        card.addEventListener('click', () => openMusicItunes(r, artUrl, year));
+        grid.appendChild(card);
+      }
     }
   } catch {
-    grid.innerHTML = '<p style="color:#555;padding:20px 0">Failed to load music.</p>';
+    grid.innerHTML = '<p style="color:#555;padding:20px 0">Search failed.</p>';
   }
 }
 
@@ -1406,21 +1525,122 @@ function openMusicAlbum(album) {
   hero.src = album.coverUrl || '';
   hero.style.display = album.coverUrl ? 'block' : 'none';
 
+  // Status badge for non-ready albums
+  let statusHtml = '';
+  if (album.status !== 'ready') {
+    const colors = { downloading: '#f59e0b', searching: '#888', error: '#f87171', pending: '#888' };
+    const col = colors[album.status] || '#888';
+    statusHtml = `<div style="margin-top:10px;padding:10px 14px;background:#0d0d0d;border:1px solid #1e1e1e;border-radius:6px;font-size:12px;color:${col}" id="musicModalStatus">
+      ${escHtml(album.message || album.status)}
+    </div>`;
+  }
+
   info.innerHTML = `
     <div class="music-modal-album">${escHtml(album.album)}</div>
     <div class="music-modal-artist">${escHtml(album.artist)}</div>
-    <div class="music-modal-meta">${album.year || ''} · ${album.tracks.length} tracks</div>`;
+    <div class="music-modal-meta">${album.year || ''} · ${album.tracks.length} tracks</div>
+    ${statusHtml}`;
 
   list.innerHTML = '';
-  album.tracks.forEach((track, i) => {
+  if (album.status === 'ready') {
+    album.tracks.forEach((track, i) => {
+      const el = document.createElement('div');
+      el.className = 'music-track';
+      el.dataset.idx = i;
+      el.innerHTML = `
+        <div class="music-track-n">${track.n}</div>
+        <div class="music-track-title">${escHtml(track.title)}</div>
+        <div class="music-track-dur">${fmtMusicTime(track.duration)}</div>`;
+      el.addEventListener('click', () => playMusicFrom(album.tracks, i, album));
+      list.appendChild(el);
+    });
+  } else if (album.tracks.length) {
+    // Show track names from iTunes metadata even before download is done
+    album.tracks.forEach(t => {
+      const el = document.createElement('div');
+      el.className = 'music-track';
+      el.style.opacity = '.4';
+      el.innerHTML = `
+        <div class="music-track-n">${t.n}</div>
+        <div class="music-track-title">${escHtml(t.title)}</div>
+        <div class="music-track-dur">${fmtMusicTime(t.duration)}</div>`;
+      list.appendChild(el);
+    });
+  }
+
+  // Listen for socket updates while modal is open
+  socket.emit('music:join', album.id);
+
+  wrap.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+
+// Opens an iTunes result (not yet in catalog) with "Add" button
+async function openMusicItunes(itunesAlbum, artUrl, year) {
+  // Fetch tracks from iTunes
+  const trackRes = await fetch(`https://itunes.apple.com/lookup?${new URLSearchParams({ id: itunesAlbum.collectionId, entity: 'song', limit: 100 })}`).then(r => r.json()).catch(() => ({ results: [] }));
+  const tracks = (trackRes.results || [])
+    .filter(r => r.wrapperType === 'track')
+    .sort((a, b) => (a.discNumber - b.discNumber) || (a.trackNumber - b.trackNumber))
+    .map(r => ({ n: r.trackNumber, disc: r.discNumber || 1, title: r.trackName, duration: Math.round((r.trackTimeMillis || 0) / 1000) }));
+
+  const fakeAlbum = {
+    id: null, itunesId: String(itunesAlbum.collectionId),
+    artist: itunesAlbum.artistName, album: itunesAlbum.collectionName,
+    year, coverUrl: artUrl, tracks, status: 'not_added',
+  };
+
+  const wrap = document.getElementById('musicModalWrap');
+  const hero = document.getElementById('musicModalHero');
+  const info = document.getElementById('musicModalInfo');
+  const list = document.getElementById('musicTrackList');
+
+  hero.src = artUrl || '';
+  hero.style.display = artUrl ? 'block' : 'none';
+
+  info.innerHTML = `
+    <div class="music-modal-album">${escHtml(itunesAlbum.collectionName)}</div>
+    <div class="music-modal-artist">${escHtml(itunesAlbum.artistName)}</div>
+    <div class="music-modal-meta">${year || ''} · ${tracks.length} tracks</div>
+    <button class="btn btn-watch" id="musicAddBtn" style="margin-top:14px;padding:10px 24px;font-size:13px">
+      + Add to Library
+    </button>`;
+
+  document.getElementById('musicAddBtn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('musicAddBtn');
+    btn.textContent = 'Adding…'; btn.disabled = true;
+    try {
+      const res = await fetch('/api/music/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itunesId: String(itunesAlbum.collectionId),
+          artist: itunesAlbum.artistName,
+          album: itunesAlbum.collectionName,
+          year, coverUrl: artUrl, tracks,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { btn.textContent = data.error || 'Error'; btn.disabled = false; return; }
+
+      toast(`Added "${itunesAlbum.collectionName}" to library`);
+      closeMusicModal();
+      await fetchMusicCatalog();
+      renderMusicGrid(_musicCatalog);
+    } catch {
+      btn.textContent = 'Error'; btn.disabled = false;
+    }
+  });
+
+  list.innerHTML = '';
+  tracks.forEach(t => {
     const el = document.createElement('div');
     el.className = 'music-track';
-    el.dataset.idx = i;
+    el.style.opacity = '.5';
     el.innerHTML = `
-      <div class="music-track-n">${track.n}</div>
-      <div class="music-track-title">${escHtml(track.title)}</div>
-      <div class="music-track-dur">${fmtMusicTime(track.duration)}</div>`;
-    el.addEventListener('click', () => playMusicFrom(album.tracks, i, album));
+      <div class="music-track-n">${t.n}</div>
+      <div class="music-track-title">${escHtml(t.title)}</div>
+      <div class="music-track-dur">${fmtMusicTime(t.duration)}</div>`;
     list.appendChild(el);
   });
 

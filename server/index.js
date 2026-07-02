@@ -79,7 +79,7 @@ app.get('/login',   (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html
 app.get('/upgrade', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'upgrade.html')));
 authRoutes(app);
 billingRoutes(app, { requireAuth });
-musicRoutes(app, { requireAuth });
+musicRoutes(app, { requireAuth, io });
 
 // All API and socket routes require auth
 app.use((req, res, next) => {
@@ -452,6 +452,10 @@ io.on('connection', (socket) => {
     const job = jobs.get(jobId);
     if (job) socket.emit('job:update', sanitize(job));
     if (job?.status === 'ready') socket.emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
+  });
+
+  socket.on('music:join', (albumId) => {
+    socket.join(`music:${albumId}`);
   });
 
   socket.on('admin:join', async () => {

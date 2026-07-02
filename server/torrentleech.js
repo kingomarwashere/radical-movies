@@ -267,6 +267,61 @@ async function tlFetchBinary(url) {
   return buf;
 }
 
+export async function searchTLMusic(artist, album) {
+  const clean = s => cleanQuery(s);
+  const queries = [
+    `${clean(artist)} ${clean(album)} FLAC`,
+    `${clean(artist)} ${clean(album)} MP3 320`,
+    `${clean(artist)} ${clean(album)}`,
+  ];
+
+  for (const q of queries) {
+    let data = null;
+    try {
+      const text = await tlFetch(
+        `/torrents/browse/list/query/${encodeURIComponent(q)}`,
+        { headers: { Accept: 'application/json, */*' } }
+      );
+      data = JSON.parse(text);
+    } catch { continue; }
+
+    const results = data?.torrentList || [];
+    if (!results.length) continue;
+
+    // Filter to audio releases by name keywords
+    const audioRe = /\b(flac|mp3|320|256|128|lossless|aac|ogg|wav|vinyl)\b/i;
+    const artistRe = makeTitleRe(clean(artist));
+    const albumRe  = makeTitleRe(clean(album));
+
+    const music = results.filter(t =>
+      audioRe.test(t.name) &&
+      artistRe.test(t.name) &&
+      albumRe.test(t.name)
+    );
+
+    if (!music.length) continue;
+
+    // Prefer FLAC, then highest seeds
+    music.sort((a, b) => {
+      const aFlac = /flac/i.test(a.name) ? 0 : 1;
+      const bFlac = /flac/i.test(b.name) ? 0 : 1;
+      if (aFlac !== bFlac) return aFlac - bFlac;
+      return (b.seeders || 0) - (a.seeders || 0);
+    });
+
+    const best = music[0];
+    console.log(`[tl-music] found: ${best.name} (${best.seeders} seeds)`);
+    const torrentBuf = await tlFetchBinary(`${TL_BASE}/download/${best.fid}/${TL_PK}`);
+    const n = best.name.toLowerCase();
+    return {
+      source: 'tl', title: best.name, seeds: best.seeders || 0,
+      size: best.size || '?', torrentBuf, magnet: null,
+      quality: /flac/i.test(n) ? 'FLAC' : /320/i.test(n) ? 'MP3 320' : 'MP3',
+    };
+  }
+  return null;
+}
+
 export async function searchTLEpisode(showTitle, season, episode) {
   showTitle = cleanQuery(showTitle);
   const s = String(season).padStart(2, '0');

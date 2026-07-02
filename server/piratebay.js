@@ -108,6 +108,44 @@ export async function searchTPB(title, year) {
   return null;
 }
 
+export async function searchTPBMusic(artist, album) {
+  artist = cleanQuery(artist);
+  album  = cleanQuery(album);
+  const attempts = [
+    { q: `${artist} ${album} FLAC`, cat: '101' },
+    { q: `${artist} ${album} MP3`,  cat: '101' },
+    { q: `${artist} ${album}`,      cat: '101' },
+    { q: `${artist} ${album}`,      cat: '100' },
+  ];
+
+  for (const { q, cat } of attempts) {
+    const results = await tpbQuery(q, cat);
+    if (!results.length) continue;
+
+    const artistRe = makeTitleRe(artist);
+    const albumRe  = makeTitleRe(album);
+    const matched  = results.filter(t => artistRe.test(t.name) && albumRe.test(t.name));
+    const pool     = matched.length ? matched : results;
+
+    pool.sort((a, b) => {
+      const aFlac = /flac/i.test(a.name) ? 0 : 1;
+      const bFlac = /flac/i.test(b.name) ? 0 : 1;
+      if (aFlac !== bFlac) return aFlac - bFlac;
+      return (parseInt(b.seeders) || 0) - (parseInt(a.seeders) || 0);
+    });
+
+    const best = pool[0];
+    const n    = best.name.toLowerCase();
+    console.log(`[tpb-music] found: ${best.name} (${best.seeders} seeds)`);
+    return {
+      source: 'tpb', title: best.name, seeds: parseInt(best.seeders) || 0,
+      size: `${Math.round(parseInt(best.size) / 1e6)}MB`, magnet: magnet(best.info_hash, best.name),
+      torrentBuf: null, quality: /flac/i.test(n) ? 'FLAC' : /320/i.test(n) ? 'MP3 320' : 'MP3',
+    };
+  }
+  return null;
+}
+
 export async function searchTPBEpisode(showTitle, season, episode) {
   showTitle = cleanQuery(showTitle);
   const s = String(season).padStart(2, '0');

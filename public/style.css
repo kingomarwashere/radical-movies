@@ -1298,6 +1298,39 @@ body.has-trial-banner .hero { padding-top: 38px; }
   font-size: 48px;
   color: #333;
 }
+.music-search-bar {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 20px; padding-top: 4px;
+}
+.music-search-input {
+  flex: 1; max-width: 380px;
+  background: var(--bg2); border: 1px solid #2a2a2a;
+  border-radius: 4px; color: #fff; font-family: var(--font);
+  font-size: 14px; padding: 9px 14px; outline: none;
+  transition: border-color .2s;
+}
+.music-search-input:focus { border-color: #555; }
+.music-search-btn {
+  background: var(--bg3); border: 1px solid #333; border-radius: 4px;
+  color: #aaa; cursor: pointer; font-family: var(--font); font-size: 13px;
+  font-weight: 600; padding: 9px 18px; transition: all .2s; white-space: nowrap;
+}
+.music-search-btn:hover { border-color: #555; color: #fff; }
+.music-search-clear {
+  background: none; border: none; color: #555; cursor: pointer;
+  font-family: var(--font); font-size: 12px; padding: 0;
+  transition: color .2s; white-space: nowrap;
+}
+.music-search-clear:hover { color: #aaa; }
+
+.music-card { position: relative; }
+.music-card-badge {
+  position: absolute; top: 7px; left: 7px;
+  background: var(--red); color: #fff;
+  font-size: 10px; font-weight: 700; padding: 2px 7px;
+  border-radius: 3px; pointer-events: none;
+}
+
 .music-card-body { padding: 10px 12px 12px; }
 .music-card-album  { font-size: 13px; font-weight: 700; color: #e5e5e5; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .music-card-artist { font-size: 11px; color: #777; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

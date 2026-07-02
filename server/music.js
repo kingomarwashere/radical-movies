@@ -10,6 +10,18 @@ import {
 } from './seedbox.js';
 import { getStreamUrl } from './r2.js';
 import { getUsers, updateUser } from './auth.js';
+import { searchTLMusic } from './torrentleech.js';
+import { searchTPBMusic } from './piratebay.js';
+
+async function findMusicTorrent(artist, album) {
+  console.log(`[music] searching torrent: "${artist} — ${album}"`);
+  const result =
+    await searchTLMusic(artist, album).catch(e => { console.error('[tl-music]', e.message); return null; }) ||
+    await searchTPBMusic(artist, album).catch(e => { console.error('[tpb-music]', e.message); return null; });
+  if (!result) throw new Error(`No torrent found for "${artist} — ${album}"`);
+  console.log(`[music] torrent found via ${result.source}: ${result.title} (${result.quality}, ${result.seeds} seeds)`);
+  return result;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,27 +60,40 @@ function slugify(str) {
 }
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
-export async function runMusicPipeline(albumId) {
+export async function runMusicPipeline(albumId, _io = null) {
   const UPLOAD_URL    = process.env.UPLOAD_URL    || process.env.R2_STREAM_URL;
   const UPLOAD_SECRET = process.env.UPLOAD_SECRET || '';
 
   function patch(update) {
     const catalog = loadCatalog();
     const a = catalog.find(x => x.id === albumId);
-    if (a) { Object.assign(a, update); saveCatalog(catalog); }
+    if (a) {
+      Object.assign(a, update);
+      saveCatalog(catalog);
+      _io?.to(`music:${albumId}`).emit('music:update', { ...a, ...update });
+    }
     return a;
   }
 
   const album = loadCatalog().find(a => a.id === albumId);
   if (!album) throw new Error('Album not found');
 
+  // Auto-find torrent if not provided by admin
+  let torrentSource = album.torrentSource;
+  if (!torrentSource) {
+    patch({ status: 'searching', message: `Searching for "${album.artist} — ${album.album}"…` });
+    const torrent = await findMusicTorrent(album.artist, album.album);
+    torrentSource = torrent.torrentBuf || torrent.magnet;
+    patch({ torrentSource: 'auto', message: `Found via ${torrent.source} (${torrent.quality}) — downloading…` });
+  }
+
   patch({ status: 'searching', message: 'Adding torrent to seedbox…' });
   const sbPath = getSeedboxSavePath(`music-${albumId}`);
-  const hash   = await addTorrent(album.torrentSource, sbPath);
+  const hash   = await addTorrent(torrentSource, sbPath);
   patch({ status: 'downloading', message: 'Downloading…' });
 
   await waitForTorrent(hash, ({ progress, speed }) => {
-    patch({ status: 'downloading', message: `Downloading ${progress}% @ ${speed}` });
+    patch({ status: 'downloading', progress, message: `Downloading ${progress}% @ ${speed}` });
   });
 
   deleteTorrent(hash, false).catch(() => {});
@@ -139,18 +164,58 @@ export async function runMusicPipeline(albumId) {
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-export function musicRoutes(app, { requireAuth }) {
+export function musicRoutes(app, { requireAuth, io }) {
   // Public: check if this user has music access
   app.get('/api/music/enabled', requireAuth, (req, res) => {
     const u = getUsers().find(x => x.username === req.username);
     res.json({ enabled: !!u?.musicEnabled });
   });
 
-  // Public: catalog — only for users with music access
+  // Public: full catalog for users with music access (includes in-progress)
   app.get('/api/music/catalog', requireAuth, (req, res) => {
     const u = getUsers().find(x => x.username === req.username);
     if (!u?.musicEnabled) return res.json([]);
-    res.json(loadCatalog().filter(a => a.status === 'ready'));
+    res.json(loadCatalog().filter(a => a.status !== 'empty'));
+  });
+
+  // User: request an album (like /api/watch for movies)
+  app.post('/api/music/request', requireAuth, async (req, res) => {
+    const u = getUsers().find(x => x.username === req.username);
+    if (!u?.musicEnabled) return res.status(403).json({ error: 'Music access not enabled for your account' });
+
+    const { itunesId, artist, album, year, coverUrl, tracks } = req.body || {};
+    if (!artist || !album) return res.status(400).json({ error: 'artist and album required' });
+
+    // Dedup by itunesId or artist+album
+    const catalog = loadCatalog();
+    const existing = catalog.find(a =>
+      (itunesId && a.itunesId === itunesId) ||
+      (a.artist?.toLowerCase() === artist.toLowerCase() && a.album?.toLowerCase() === album.toLowerCase())
+    );
+
+    if (existing) {
+      if (existing.status === 'ready') return res.json({ albumId: existing.id, status: 'ready' });
+      return res.json({ albumId: existing.id, status: existing.status, message: existing.message });
+    }
+
+    const albumId = randomUUID();
+    catalog.push({
+      id: albumId, artist: artist.trim(), album: album.trim(),
+      year: year ? parseInt(year) : null, coverUrl: coverUrl || null,
+      tracks: tracks || [], itunesId: itunesId || null,
+      torrentSource: null, status: 'searching', message: 'Queued',
+      requestedBy: req.username, createdAt: Date.now(),
+    });
+    saveCatalog(catalog);
+    res.json({ albumId, status: 'searching' });
+
+    runMusicPipeline(albumId, io).catch(e => {
+      console.error(`[music] pipeline error ${albumId}:`, e.message);
+      const c = loadCatalog();
+      const a = c.find(x => x.id === albumId);
+      if (a) { a.status = 'error'; a.message = e.message; saveCatalog(c); }
+      io?.to(`music:${albumId}`).emit('music:update', { id: albumId, status: 'error', message: e.message });
+    });
   });
 
   // Admin: toggle music for a specific user
