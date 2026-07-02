@@ -423,11 +423,22 @@ document.getElementById('btnCreateUser')?.addEventListener('click', async () => 
 });
 
 // ── Invite Codes ─────────────────────────────────────────────────────────────
+function fmtDuration(ms) {
+  if (!ms) return '<span class="muted">Lifetime</span>';
+  const days = Math.round(ms / 86400000);
+  if (days === 7)   return '7 days';
+  if (days === 30)  return '1 month';
+  if (days === 90)  return '3 months';
+  if (days === 180) return '6 months';
+  if (days === 365) return '1 year';
+  return `${days} days`;
+}
+
 async function fetchCodes() {
   try {
     const codes = await fetch('/api/admin/invite-codes').then(r => r.json());
     const tbody = document.getElementById('codesTbody');
-    if (!codes.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No codes yet — click Generate Code to create one</td></tr>'; return; }
+    if (!codes.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No codes yet — click Generate Code to create one</td></tr>'; return; }
     tbody.innerHTML = codes.map(c => {
       const used    = !!c.usedBy;
       const status  = used
@@ -442,6 +453,7 @@ async function fetchCodes() {
       return `<tr>
         <td><strong class="mono" style="letter-spacing:1px;color:#ff0099">${esc(c.code)}</strong></td>
         <td class="muted" style="font-size:11px">${esc(c.notes || '—')}</td>
+        <td style="font-size:11px">${fmtDuration(c.durationMs)}</td>
         <td>${status}</td>
         <td>${usedBy}</td>
         <td class="muted mono" style="font-size:11px">${created}</td>
@@ -457,18 +469,20 @@ document.getElementById('btnGenCode')?.addEventListener('click', () => {
 });
 
 document.getElementById('btnCreateCode')?.addEventListener('click', async () => {
-  const code  = document.getElementById('codeInput').value.trim().toUpperCase();
-  const notes = document.getElementById('codeNotes').value.trim();
+  const code       = document.getElementById('codeInput').value.trim().toUpperCase();
+  const notes      = document.getElementById('codeNotes').value.trim();
+  const durationMs = parseInt(document.getElementById('codeDuration').value) || null;
   const res = await fetch('/api/admin/invite-codes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: code || undefined, notes }),
+    body: JSON.stringify({ code: code || undefined, notes, durationMs }),
   });
   const data = await res.json();
   if (res.ok) {
     appendLog(`[LOG] Invite code created: ${data.code}`);
-    document.getElementById('codeInput').value  = '';
-    document.getElementById('codeNotes').value  = '';
+    document.getElementById('codeInput').value    = '';
+    document.getElementById('codeNotes').value    = '';
+    document.getElementById('codeDuration').value = '';
     document.getElementById('codeCreateForm').hidden = true;
     fetchCodes();
   } else {

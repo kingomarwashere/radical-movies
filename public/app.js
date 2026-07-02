@@ -126,13 +126,14 @@ async function checkAuth() {
     loggedInUser = data.username;
     navUsername.textContent = loggedInUser;
     if (!data.paid) { location.href = '/upgrade'; return; }
-    if (data.inTrial && data.trialEndsAt) startTrialBanner(data.trialEndsAt);
+    const expiresAt = data.inTrial ? data.trialEndsAt : data.accessExpiresAt;
+    if (expiresAt && Date.now() < expiresAt) startExpiryBanner(expiresAt, data.inTrial ? 'trial' : 'access');
   } catch {
     location.href = '/login';
   }
 }
 
-function startTrialBanner(endsAt) {
+function startExpiryBanner(endsAt, type) {
   const banner = $('trialBanner');
   const text   = $('trialText');
   if (!banner || !text) return;
@@ -140,9 +141,12 @@ function startTrialBanner(endsAt) {
   function update() {
     const ms = endsAt - Date.now();
     if (ms <= 0) { location.href = '/upgrade'; return; }
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    text.textContent = `⏳ Free trial: ${h}h ${m}m remaining`;
+    const days = Math.floor(ms / 86400000);
+    const h    = Math.floor((ms % 86400000) / 3600000);
+    const m    = Math.floor((ms % 3600000) / 60000);
+    const timeStr = days > 1 ? `${days}d ${h}h` : days === 1 ? `1d ${h}h` : `${h}h ${m}m`;
+    const label   = type === 'trial' ? 'Free trial' : 'Access';
+    text.textContent = `⏳ ${label} expires in ${timeStr}`;
     banner.hidden = false;
     document.body.classList.add('has-trial-banner');
   }

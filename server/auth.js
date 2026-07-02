@@ -205,9 +205,18 @@ export function authRoutes(app) {
     if (!username) return res.status(401).json({ error: 'Unauthorised' });
     const users = loadUsers();
     const u = users.find(x => x.username === username);
-    const inTrial    = !!(u?.trialEndsAt && Date.now() < u.trialEndsAt && !u?.paid);
-    const paid       = u ? (u.paid === undefined || u.paid === true || inTrial) : false;
-    const trialEndsAt = u?.trialEndsAt || null;
-    res.json({ username, paid, accessType: u?.accessType || null, inTrial, trialEndsAt });
+    const now            = Date.now();
+    const inTrial        = !!(u?.trialEndsAt && now < u.trialEndsAt && !u?.paid);
+    const accessExpiresAt = u?.accessExpiresAt || null;
+    const accessExpired  = !!(accessExpiresAt && now > accessExpiresAt);
+    const paid           = u ? (u.paid === undefined || (u.paid === true && !accessExpired) || inTrial) : false;
+    res.json({
+      username,
+      paid,
+      accessType:      u?.accessType     || null,
+      inTrial,
+      trialEndsAt:     u?.trialEndsAt    || null,
+      accessExpiresAt,
+    });
   });
 }

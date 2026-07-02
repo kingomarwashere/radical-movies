@@ -430,14 +430,22 @@
       <div class="section-title">Invite Codes</div>
       <button class="btn btn-ghost btn-sm" id="btnGenCode">+ Generate Code</button>
     </div>
-    <div id="codeCreateForm" style="margin-bottom:16px;display:flex;gap:8px;align-items:center" hidden>
-      <input id="codeInput" placeholder="Custom code (optional)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:200px;letter-spacing:1px;text-transform:uppercase">
-      <input id="codeNotes" placeholder="Note (e.g. John's code)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:200px">
+    <div id="codeCreateForm" style="margin-bottom:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" hidden>
+      <input id="codeInput" placeholder="Custom code (optional)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:180px;letter-spacing:1px;text-transform:uppercase">
+      <input id="codeNotes" placeholder="Note (e.g. John's free access)" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none;width:180px">
+      <select id="codeDuration" style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#e5e5e5;font-family:inherit;font-size:12px;border-radius:4px;outline:none">
+        <option value="">Lifetime (no expiry)</option>
+        <option value="604800000">7 days</option>
+        <option value="2592000000">1 month</option>
+        <option value="7776000000">3 months</option>
+        <option value="15552000000">6 months</option>
+        <option value="31536000000">1 year</option>
+      </select>
       <button class="btn btn-ghost btn-sm" id="btnCreateCode">Create</button>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Code</th><th>Note</th><th>Status</th><th>Used By</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Note</th><th>Duration</th><th>Status</th><th>Used By</th><th>Created</th><th></th></tr></thead>
         <tbody id="codesTbody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>

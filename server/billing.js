@@ -37,8 +37,6 @@ function saveCodes(c) {
   try { fs.writeFileSync(CODES_FILE, JSON.stringify(c)); } catch {}
 }
 
-const TRIAL_MS = 24 * 60 * 60 * 1000; // 1 day
-
 // ── Paid status ──────────────────────────────────────────────────────────────
 // Users created before billing was introduced have no 'paid' field — grandfather them in.
 export function isPaid(username) {
@@ -46,8 +44,11 @@ export function isPaid(username) {
   const u = users.find(x => x.username === username);
   if (!u) return false;
   if (u.paid === undefined) return true;           // legacy user — grandfathered
-  if (u.paid === true)      return true;           // explicitly paid
-  if (u.trialEndsAt && Date.now() < u.trialEndsAt) return true; // in free trial
+  if (u.paid === true) {
+    if (u.accessExpiresAt && Date.now() > u.accessExpiresAt) return false; // time-limited access expired
+    return true;
+  }
+  if (u.trialEndsAt && Date.now() < u.trialEndsAt) return true; // free 1-day trial
   return false;
 }
 
@@ -55,9 +56,17 @@ export function getPaidInfo(username) {
   const users = loadUsers();
   const u = users.find(x => x.username === username);
   if (!u) return { paid: false };
-  const inTrial = !!(u.trialEndsAt && Date.now() < u.trialEndsAt && !u.paid);
-  const paid = u.paid === undefined || u.paid === true || inTrial;
-  return { paid, accessType: u.accessType || null, inTrial, trialEndsAt: u.trialEndsAt || null };
+  const now = Date.now();
+  const inTrial        = !!(u.trialEndsAt && now < u.trialEndsAt && !u.paid);
+  const accessExpired  = !!(u.accessExpiresAt && now > u.accessExpiresAt);
+  const paid           = u.paid === undefined || (u.paid === true && !accessExpired) || inTrial;
+  return {
+    paid,
+    accessType:      u.accessType || null,
+    inTrial,
+    trialEndsAt:     u.trialEndsAt     || null,
+    accessExpiresAt: u.accessExpiresAt || null,
+  };
 }
 
 export function markUserPaid(username, accessType = 'stripe', extra = {}) {
@@ -67,10 +76,13 @@ export function markUserPaid(username, accessType = 'stripe', extra = {}) {
   u.paid       = true;
   u.accessType = accessType;
   u.paidAt     = u.paidAt || Date.now();
-  if (extra.subscriptionId) u.stripeSubscriptionId = extra.subscriptionId;
-  if (extra.customerId)     u.stripeCustomerId     = extra.customerId;
+  if (extra.subscriptionId)  u.stripeSubscriptionId = extra.subscriptionId;
+  if (extra.customerId)      u.stripeCustomerId     = extra.customerId;
+  if (extra.accessExpiresAt) u.accessExpiresAt      = extra.accessExpiresAt;
+  else                       delete u.accessExpiresAt; // stripe sub = permanent
   saveUsers(users);
-  console.log(`[billing] ${username} → paid (${accessType})`);
+  const expiry = extra.accessExpiresAt ? ` until ${new Date(extra.accessExpiresAt).toLocaleDateString()}` : '';
+  console.log(`[billing] ${username} → paid (${accessType})${expiry}`);
 }
 
 // ── Webhook handler (needs raw body — mounted before express.json()) ─────────
@@ -105,22 +117,50 @@ export async function handleWebhook(req, res) {
 export function billingRoutes(app, { requireAuth }) {
   // Create Stripe Checkout session
   app.post('/api/billing/checkout', requireAuth, async (req, res) => {
-    const { plan } = req.body;
-    const priceId = plan === 'annual'
-      ? process.env.STRIPE_PRICE_ANNUAL
-      : process.env.STRIPE_PRICE_MONTHLY;
-    if (!priceId) return res.status(500).json({ error: 'Stripe prices not configured' });
+    const { plan, introPeriod } = req.body;
 
     try {
-      const session = await stripe().checkout.sessions.create({
-        mode: 'subscription',
-        payment_method_types: ['card'],
-        line_items: [{ price: priceId, quantity: 1 }],
-        client_reference_id: req.username,
-        metadata: { username: req.username },
-        success_url: `${SITE_URL}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url:  `${SITE_URL}/upgrade`,
-      });
+      let sessionParams;
+
+      if (plan === 'intro') {
+        const periodDays = { '7days': 7, '1month': 30, '3month': 90, '6month': 180, '1year': 365 };
+        const days = periodDays[introPeriod] || 30;
+        const introPrice   = process.env.STRIPE_PRICE_INTRO;
+        const monthlyPrice = process.env.STRIPE_PRICE_MONTHLY;
+        if (!introPrice || !monthlyPrice) return res.status(500).json({ error: 'Stripe intro prices not configured' });
+
+        sessionParams = {
+          mode: 'subscription',
+          payment_method_types: ['card'],
+          line_items: [{ price: monthlyPrice, quantity: 1 }],
+          subscription_data: {
+            trial_period_days: days,
+            add_invoice_items: [{ price: introPrice, quantity: 1 }],
+            metadata: { intro: 'true', introPeriod: introPeriod || '1month' },
+          },
+          client_reference_id: req.username,
+          metadata: { username: req.username },
+          success_url: `${SITE_URL}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url:  `${SITE_URL}/upgrade`,
+        };
+      } else {
+        const priceId = plan === 'annual'
+          ? process.env.STRIPE_PRICE_ANNUAL
+          : process.env.STRIPE_PRICE_MONTHLY;
+        if (!priceId) return res.status(500).json({ error: 'Stripe prices not configured' });
+
+        sessionParams = {
+          mode: 'subscription',
+          payment_method_types: ['card'],
+          line_items: [{ price: priceId, quantity: 1 }],
+          client_reference_id: req.username,
+          metadata: { username: req.username },
+          success_url: `${SITE_URL}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url:  `${SITE_URL}/upgrade`,
+        };
+      }
+
+      const session = await stripe().checkout.sessions.create(sessionParams);
       res.json({ url: session.url });
     } catch (e) {
       console.error('[billing] checkout error:', e.message);
@@ -159,21 +199,30 @@ export function billingRoutes(app, { requireAuth }) {
     entry.usedBy = req.username;
     entry.usedAt = Date.now();
     saveCodes(codes);
-    markUserPaid(req.username, 'invite');
-    res.json({ ok: true });
+
+    const accessExpiresAt = entry.durationMs ? Date.now() + entry.durationMs : null;
+    markUserPaid(req.username, 'invite', { accessExpiresAt });
+    res.json({ ok: true, accessExpiresAt });
   });
 
   // ── Admin: invite codes ───────────────────────────────────────────────────
   app.get('/api/admin/invite-codes', requireAuth, (_req, res) => res.json(loadCodes()));
 
   app.post('/api/admin/invite-codes', requireAuth, (req, res) => {
-    const { code, notes } = req.body || {};
+    const { code, notes, durationMs } = req.body || {};
     const newCode = code?.trim().toUpperCase() || genCode();
     const codes = loadCodes();
     if (codes.find(c => c.code.toLowerCase() === newCode.toLowerCase())) {
       return res.status(409).json({ error: 'Code already exists' });
     }
-    codes.push({ code: newCode, notes: notes || '', createdAt: Date.now(), usedBy: null, usedAt: null });
+    codes.push({
+      code: newCode,
+      notes: notes || '',
+      durationMs: durationMs || null, // null = lifetime
+      createdAt: Date.now(),
+      usedBy: null,
+      usedAt: null,
+    });
     saveCodes(codes);
     res.json({ ok: true, code: newCode });
   });
