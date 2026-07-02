@@ -597,117 +597,129 @@ async function runPipeline(jobId) {
     seeds: torrent.seeds,
   });
 
-  // 2. Download — seedbox (10Gbps) preferred, WebTorrent fallback
+  // 2. Download — seedbox (10Gbps) preferred, auto-fallback to WebTorrent if unavailable
   const downloadSource = torrent.torrentBuf || torrent.torrentUrl || torrent.magnet;
 
+  let seedboxDone = false; // true = seedbox completed the full job (with R2), skip WebTorrent
+
   if (seedboxConfigured) {
-    console.log(`[pipeline] using seedbox for job ${jobId}`);
-    emit({ message: '⚡ Sending to seedbox (10Gbps)…' });
+    try {
+      console.log(`[pipeline] using seedbox for job ${jobId}`);
+      emit({ message: '⚡ Sending to seedbox (10Gbps)…' });
 
-    const sbSavePath = getSeedboxSavePath(jobId);
-    const torrentHash = await addTorrent(downloadSource, sbSavePath);
-    console.log(`[seedbox] torrent added, hash: ${torrentHash}, save path: ${sbSavePath}`);
+      const sbSavePath = getSeedboxSavePath(jobId);
+      const torrentHash = await addTorrent(downloadSource, sbSavePath);
+      console.log(`[seedbox] torrent added, hash: ${torrentHash}, save path: ${sbSavePath}`);
 
-    const completed = await waitForTorrent(torrentHash, (p) => {
-      emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
-    });
+      const completed = await waitForTorrent(torrentHash, (p) => {
+        emit({ status: 'downloading', ...p, message: `Seedbox: ${p.progress}% @ ${p.speed}` });
+      });
 
-    // Scan the seedbox save dir FIRST (uses qBit torrent info for actual path)
-    job.downloadedAt = Date.now();
-    emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
-    const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
+      // Scan the seedbox save dir FIRST (uses qBit torrent info for actual path)
+      job.downloadedAt = Date.now();
+      emit({ status: 'downloading', progress: 100, message: 'Locating video file on seedbox…' });
+      const { path: remoteVideoPath, size: remoteFileSize } = await findVideoFile(jobId, torrentHash);
 
-    // Free the qBit slot after we have the path — avoids race where torrent is
-    // deleted before findVideoFile can look up the actual save path via qBit API
-    // Remove from qBit queue (frees slot) but keep files on disk — ffmpeg still needs them
-    if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
+      // Free the qBit slot after we have the path — avoids race where torrent is
+      // deleted before findVideoFile can look up the actual save path via qBit API
+      // Remove from qBit queue (frees slot) but keep files on disk — ffmpeg still needs them
+      if (torrentHash) deleteTorrent(torrentHash, false).catch(e => console.warn('[seedbox] delete failed:', e.message));
 
-    if (r2Configured) {
-      const remoteExt = path.extname(remoteVideoPath).toLowerCase();
+      if (r2Configured) {
+        const remoteExt = path.extname(remoteVideoPath).toLowerCase();
 
-      // Probe both audio and video codecs in one SSH call
-      emit({ status: 'uploading', progress: 0, message: 'Probing codecs…' });
-      const { audio: audioCodecSSH, video: videoCodecSSH } = await probeRemoteCodecs(remoteVideoPath);
-      const audioCodec = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
-      const videoCodec = videoCodecSSH;
-      console.log(`[pipeline] codecs — video: ${videoCodec ?? 'unknown'}, audio: ${audioCodec ?? 'unknown'}`);
+        // Probe both audio and video codecs in one SSH call
+        emit({ status: 'uploading', progress: 0, message: 'Probing codecs…' });
+        const { audio: audioCodecSSH, video: videoCodecSSH } = await probeRemoteCodecs(remoteVideoPath);
+        const audioCodec = audioCodecSSH ?? await probeRemoteFileAudio(remoteVideoPath, DOWNLOADS_DIR);
+        const videoCodec = videoCodecSSH;
+        console.log(`[pipeline] codecs — video: ${videoCodec ?? 'unknown'}, audio: ${audioCodec ?? 'unknown'}`);
 
-      // H.264 (h264/avc1) is the only video codec with universal browser support including Safari.
-      // H.265/HEVC plays in Chrome via software decode but fails in Safari on most hardware.
-      const SAFE_VIDEO = new Set(['h264', 'avc1', 'mpeg4']);
-      const SAFE_AUDIO = new Set(['aac']);
-      const needsVideoFix = videoCodec !== null && !SAFE_VIDEO.has(videoCodec);
-      const needsAudioFix = audioCodec !== null
-        ? !SAFE_AUDIO.has(audioCodec)
-        : remoteExt !== '.mp4';
+        // H.264 (h264/avc1) is the only video codec with universal browser support including Safari.
+        // H.265/HEVC plays in Chrome via software decode but fails in Safari on most hardware.
+        const SAFE_VIDEO = new Set(['h264', 'avc1', 'mpeg4']);
+        const SAFE_AUDIO = new Set(['aac']);
+        const needsVideoFix = videoCodec !== null && !SAFE_VIDEO.has(videoCodec);
+        const needsAudioFix = audioCodec !== null
+          ? !SAFE_AUDIO.has(audioCodec)
+          : remoteExt !== '.mp4';
 
-      const baseName = path.basename(remoteVideoPath, remoteExt);
-      let r2Key, uploadMsg, uploadFn;
+        const baseName = path.basename(remoteVideoPath, remoteExt);
+        let r2Key, uploadMsg, uploadFn;
 
-      if (needsVideoFix) {
-        // H.265 / AV1 / VP9: must re-encode video to H.264 for Safari.
-        // CRF 20 + fast preset: ~5-10 min for a 2h movie on seedbox CPU.
-        r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Transcoding on seedbox (${videoCodec}→H.264${needsAudioFix ? ', ' + audioCodec + '→AAC' : ''})…`;
-        uploadFn  = (cb) => transcodeVideoOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb, needsAudioFix);
-        console.log(`[pipeline] transcode video: ${videoCodec}→h264${needsAudioFix ? ` + audio: ${audioCodec}→aac` : ''}`);
-      } else if (needsAudioFix) {
-        // H.264 video + bad audio (DTS/EAC3): re-encode audio only
-        r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Transcoding on seedbox (${audioCodec ?? 'unknown'}→AAC)…`;
-        uploadFn  = (cb) => transcodeOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] transcode audio: ${audioCodec ?? 'unknown'}→aac`);
-      } else if (remoteExt !== '.mp4') {
-        // H.264 + AAC in MKV: container remux only
-        r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Remuxing on seedbox (MKV→MP4)…`;
-        uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] remux: mkv→mp4`);
+        if (needsVideoFix) {
+          // H.265 / AV1 / VP9: must re-encode video to H.264 for Safari.
+          // CRF 20 + fast preset: ~5-10 min for a 2h movie on seedbox CPU.
+          r2Key     = `movies/${jobId}/${baseName}.mp4`;
+          uploadMsg = `Transcoding on seedbox (${videoCodec}→H.264${needsAudioFix ? ', ' + audioCodec + '→AAC' : ''})…`;
+          uploadFn  = (cb) => transcodeVideoOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb, needsAudioFix);
+          console.log(`[pipeline] transcode video: ${videoCodec}→h264${needsAudioFix ? ` + audio: ${audioCodec}→aac` : ''}`);
+        } else if (needsAudioFix) {
+          // H.264 video + bad audio (DTS/EAC3): re-encode audio only
+          r2Key     = `movies/${jobId}/${baseName}.mp4`;
+          uploadMsg = `Transcoding on seedbox (${audioCodec ?? 'unknown'}→AAC)…`;
+          uploadFn  = (cb) => transcodeOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+          console.log(`[pipeline] transcode audio: ${audioCodec ?? 'unknown'}→aac`);
+        } else if (remoteExt !== '.mp4') {
+          // H.264 + AAC in MKV: container remux only
+          r2Key     = `movies/${jobId}/${baseName}.mp4`;
+          uploadMsg = `Remuxing on seedbox (MKV→MP4)…`;
+          uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+          console.log(`[pipeline] remux: mkv→mp4`);
+        } else {
+          // Already H.264 + AAC + MP4: remux to fMP4 for instant browser start
+          r2Key     = `movies/${jobId}/${baseName}.mp4`;
+          uploadMsg = `Remuxing on seedbox (fMP4 for instant start)…`;
+          uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
+          console.log(`[pipeline] remux mp4→fmp4 (${audioCodec})`);
+        }
+
+        emit({ status: 'uploading', progress: 0, message: uploadMsg });
+        incSeedboxOps();
+        try {
+          await uploadFn((pct) => emit({ status: 'uploading', progress: pct, message: `${uploadMsg.replace('…', '')} ${pct}%` }));
+        } finally {
+          decSeedboxOps();
+        }
+        trackBandwidth(remoteFileSize);
+        // Delete source files from seedbox NOW (after ffmpeg is done with them)
+        deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
+
+        job.status    = 'ready';
+        job.readyAt   = Date.now();
+        job.r2Key     = r2Key;
+        job.streamUrl = getStreamUrl(r2Key);
+        saveJobs();
+        io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
+        io.to(jobId).emit('job:update', sanitize(job));
+        seedboxDone = true;
       } else {
-        // Already H.264 + AAC + MP4: remux to fMP4 for instant browser start
-        r2Key     = `movies/${jobId}/${baseName}.mp4`;
-        uploadMsg = `Remuxing on seedbox (fMP4 for instant start)…`;
-        uploadFn  = (cb) => remuxOnSeedbox(remoteVideoPath, remoteFileSize, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, r2Key, cb);
-        console.log(`[pipeline] remux mp4→fmp4 (${audioCodec})`);
-      }
+        // No R2 — pull to VM disk for local serving / transcoding
+        const localJobDir = path.join(DOWNLOADS_DIR, jobId);
+        fs.mkdirSync(localJobDir, { recursive: true });
+        const localPath = path.join(localJobDir, path.basename(remoteVideoPath));
 
-      emit({ status: 'uploading', progress: 0, message: uploadMsg });
-      incSeedboxOps();
-      try {
-        await uploadFn((pct) => emit({ status: 'uploading', progress: pct, message: `${uploadMsg.replace('…', '')} ${pct}%` }));
-      } finally {
-        decSeedboxOps();
+        emit({ status: 'downloading', progress: 100, message: 'Pulling from seedbox via SFTP…' });
+        await pullFileViaSftp(remoteVideoPath, localPath, (pct) => {
+          emit({ status: 'downloading', progress: pct, message: `Pulling from seedbox… ${pct}%` });
+        });
+        deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
+        job._rawPath = localPath;
       }
-      trackBandwidth(remoteFileSize);
-      // Delete source files from seedbox NOW (after ffmpeg is done with them)
-      deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
-
-      job.status    = 'ready';
-      job.readyAt   = Date.now();
-      job.r2Key     = r2Key;
-      job.streamUrl = getStreamUrl(r2Key);
-      saveJobs();
-      io.to(jobId).emit('job:ready', { jobId, streamUrl: job.streamUrl, title: job.title });
-      io.to(jobId).emit('job:update', sanitize(job));
-      return;
+    } catch (sbErr) {
+      // Seedbox unavailable (502, cooldown, login failure) — fall back to WebTorrent
+      const isDown = /502|unavailable|cooldown|login failed/i.test(sbErr.message);
+      if (!isDown) throw sbErr;
+      console.warn(`[pipeline] seedbox unavailable — WebTorrent fallback (${sbErr.message.slice(0, 80)})`);
+      emit({ message: 'Seedbox unavailable — downloading directly (slower)…' });
     }
+  }
 
-    // No R2 — pull to VM disk for local serving / transcoding
-    const localJobDir = path.join(DOWNLOADS_DIR, jobId);
-    fs.mkdirSync(localJobDir, { recursive: true });
-    const localPath = path.join(localJobDir, path.basename(remoteVideoPath));
+  if (seedboxDone) return;
 
-    emit({ status: 'downloading', progress: 100, message: 'Pulling from seedbox via SFTP…' });
-    await pullFileViaSftp(remoteVideoPath, localPath, (pct) => {
-      emit({ status: 'downloading', progress: pct, message: `Pulling from seedbox… ${pct}%` });
-    });
-    deleteSeedboxDir(sbSavePath).catch(e => console.warn('[seedbox] dir cleanup failed:', e.message));
-
-    job._rawPath = localPath;
-
-
-  } else {
-    console.log(`[pipeline] using WebTorrent (no seedbox) for job ${jobId}`);
+  if (!job._rawPath) {
+    // Either seedbox not configured, or seedbox failed and we need WebTorrent
+    console.log(`[pipeline] using WebTorrent for job ${jobId}`);
     await new Promise((resolve, reject) => {
       downloadTorrent(downloadSource, jobId, {
         onProgress: (p) => emit({ status: 'downloading', ...p }),
