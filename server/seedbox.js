@@ -1308,7 +1308,7 @@ os.makedirs('/home/seedit4me/tmp', exist_ok=True)
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
-    h = {'x-upload-secret': SECRET, 'User-Agent': 'radical/1.0'}
+    h = {'x-upload-secret': SECRET, 'User-Agent': 'curl/7.88.1'}
     if ct: h['content-type'] = ct
     with urlopen(Request(url, data=data, method=method, headers=h), timeout=300) as r:
         return json.loads(r.read())
@@ -1394,7 +1394,7 @@ os.makedirs('/home/seedit4me/tmp', exist_ok=True)
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
-    h = {'x-upload-secret': SECRET, 'User-Agent': 'radical/1.0'}
+    h = {'x-upload-secret': SECRET, 'User-Agent': 'curl/7.88.1'}
     if ct: h['content-type'] = ct
     with urlopen(Request(url, data=data, method=method, headers=h), timeout=120) as r:
         return json.loads(r.read())
