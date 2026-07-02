@@ -991,7 +991,8 @@ BASE   = ${JSON.stringify(r2UploadUrl)}
 SECRET = ${JSON.stringify(r2Secret)}
 CHUNK  = ${CHUNK}
 CODEC  = ${JSON.stringify(codecArgs)}
-TMPOUT = '/tmp/radical-web-' + str(os.getpid()) + '.mp4'
+TMPOUT = '/home/seedit4me/tmp/radical-web-' + str(os.getpid()) + '.mp4'
+os.makedirs('/home/seedit4me/tmp', exist_ok=True)
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
@@ -1276,7 +1277,8 @@ MIME   = 'audio/mpeg'
 BASE   = ${JSON.stringify(uploadUrl)}
 SECRET = ${JSON.stringify(secret)}
 CHUNK  = ${CHUNK}
-TMPOUT = '/tmp/radical-audio-' + str(os.getpid()) + '.mp3'
+TMPOUT = '/home/seedit4me/tmp/radical-audio-' + str(os.getpid()) + '.mp3'
+os.makedirs('/home/seedit4me/tmp', exist_ok=True)
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
@@ -1361,7 +1363,8 @@ FILE   = ${JSON.stringify(audioPath)}
 KEY    = ${JSON.stringify(r2Key)}
 BASE   = ${JSON.stringify(uploadUrl)}
 SECRET = ${JSON.stringify(secret)}
-TMPOUT = '/tmp/radical-cover-' + str(os.getpid()) + '.jpg'
+TMPOUT = '/home/seedit4me/tmp/radical-cover-' + str(os.getpid()) + '.jpg'
+os.makedirs('/home/seedit4me/tmp', exist_ok=True)
 
 def api(action, extra='', method='GET', data=None, ct=None):
     url = BASE + '?action=' + action + '&key=' + quote(KEY, safe='') + extra
