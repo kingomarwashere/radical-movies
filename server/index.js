@@ -183,6 +183,11 @@ app.post('/api/admin/catalog/retry', (req, res) => {
   res.json({ ok: true, message: 'Cooldown cleared, catalog retry started' });
 });
 
+app.post('/api/admin/clear-cooldown', (req, res) => {
+  clearQbtCooldown();
+  res.json({ ok: true });
+});
+
 // ── Library ────────────────────────────────────────────────────────────────
 app.get('/api/library', (req, res) => {
   const user = req.username;

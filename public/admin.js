@@ -349,7 +349,13 @@ function renderHealth({ activeSeedboxOps = 0, cooldownSecsLeft = 0, diskFreeGb =
     qbtVal.className  = 'health-value crit';
     qbtVal.textContent = 'COOLDOWN';
     const mins = Math.ceil(cooldownSecsLeft / 60);
-    qbtSub.textContent = `${mins}m remaining — all jobs blocked`;
+    qbtSub.innerHTML = `${mins}m remaining — <button id="clearCooldownBtn" style="background:var(--red);border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:700;padding:2px 10px;border-radius:3px;cursor:pointer;letter-spacing:.3px">Clear Now</button>`;
+    document.getElementById('clearCooldownBtn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('clearCooldownBtn');
+      btn.textContent = '…'; btn.disabled = true;
+      await fetch('/api/admin/clear-cooldown', { method: 'POST' });
+      appendLog('[LOG] qBittorrent cooldown cleared');
+    });
   } else {
     qbtCard.className = 'health-card';
     qbtVal.className  = 'health-value ok';
