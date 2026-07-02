@@ -1342,7 +1342,7 @@ with open(TMPOUT,'rb') as f:
         parts.append({'partNumber':pn,'etag':r['etag']})
         up += len(chunk)
         sys.stdout.write(json.dumps({'pct':min(99,int(up/size*100))})+'\\n'); sys.stdout.flush()
-api('complete','&uploadId='+uid,method='POST',data=json.dumps(parts).encode(),ct='application/json')
+api('complete','&uploadId='+uid,method='POST',data=json.dumps({'parts':parts}).encode(),ct='application/json')
 if os.path.exists(TMPOUT): os.unlink(TMPOUT)
 sys.stdout.write(json.dumps({'done':True})+'\\n')
 `;
@@ -1412,7 +1412,7 @@ uid  = r['uploadId']
 with open(TMPOUT,'rb') as f:
     data = f.read()
 r = api('part','&uploadId='+r['uploadId']+'&partNumber=1',method='PUT',data=data,ct='application/octet-stream')
-api('complete','&uploadId='+uid,method='POST',data=json.dumps([{'partNumber':1,'etag':r['etag']}]).encode(),ct='application/json')
+api('complete','&uploadId='+uid,method='POST',data=json.dumps({'parts':[{'partNumber':1,'etag':r['etag']}]}).encode(),ct='application/json')
 if os.path.exists(TMPOUT): os.unlink(TMPOUT)
 sys.stdout.write(json.dumps({'done':True})+'\\n')
 `;
