@@ -209,6 +209,7 @@ async function init() {
   setupNav();
   setupSearch();
   setupPlayerControls();
+  setupSubtitles();
   setupParty();
   startLibraryPolling();
   loadAll();
@@ -844,6 +845,7 @@ function openPlayer(streamUrl, title, posterPath = null, meta = null) {
     }, { once: true });
   }
   videoEl.play().catch(() => {});
+  if (currentJobId) loadSubtitlesForJob(currentJobId);
   _currentStreamId = Math.random().toString(36).slice(2);
   socket.emit('stream:start', { streamId: _currentStreamId, title, streamUrl, jobId: currentJobId });
   // Hide overlapping UI
@@ -862,10 +864,68 @@ function closePlayer() {
   if (_currentStreamId) { socket.emit('stream:end', { streamId: _currentStreamId }); _currentStreamId = null; }
   currentJobId = null;
   _nowPlaying = null;
+  videoEl.querySelectorAll('track').forEach(t => t.remove());
+  const ccBtn = $('playerCcBtn'); if (ccBtn) { ccBtn.hidden = true; ccBtn.classList.remove('active'); }
+  const subMenu = $('subMenu'); if (subMenu) subMenu.hidden = true;
   // Restore overlapping UI
   const banner = $('trialBanner');
   if (banner && document.body.classList.contains('has-trial-banner')) banner.hidden = false;
   window.Tawk_API?.showWidget?.();
+}
+
+// ── Subtitles ──────────────────────────────────────────────────────────────
+function loadSubtitlesForJob(jobId) {
+  const job    = libraryData.find(j => j.id === jobId);
+  const tracks = job?.subtitleTracks || [];
+  const ccBtn  = $('playerCcBtn');
+  const menu   = $('subMenu');
+
+  videoEl.querySelectorAll('track').forEach(t => t.remove());
+  ccBtn.hidden = !tracks.length;
+  menu.hidden  = true;
+  if (!tracks.length) return;
+
+  tracks.forEach((t) => {
+    const el = document.createElement('track');
+    el.kind    = 'subtitles';
+    el.src     = t.url;
+    el.srclang = t.lang;
+    el.label   = t.label;
+    videoEl.appendChild(el);
+  });
+
+  menu.innerHTML = `<div class="sub-menu-item active" data-idx="-1">Off</div>`
+    + tracks.map((t, i) => `<div class="sub-menu-item" data-idx="${i}">${escHtml(t.label)}</div>`).join('');
+
+  menu.querySelectorAll('.sub-menu-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const idx = parseInt(item.dataset.idx);
+      for (let i = 0; i < videoEl.textTracks.length; i++)
+        videoEl.textTracks[i].mode = (i === idx) ? 'showing' : 'hidden';
+      menu.querySelectorAll('.sub-menu-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+      ccBtn.classList.toggle('active', idx >= 0);
+      menu.hidden = true;
+    });
+  });
+}
+
+function setupSubtitles() {
+  const ccBtn = $('playerCcBtn');
+  const menu  = $('subMenu');
+  ccBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+  });
+  document.addEventListener('click', (e) => {
+    if (!ccBtn.contains(e.target) && !menu.contains(e.target)) menu.hidden = true;
+  });
+  // Re-check when job updates arrive (subtitle extraction is async)
+  socket.on('job:update', (job) => {
+    if (job.id === currentJobId && job.subtitleTracks?.length) {
+      loadSubtitlesForJob(currentJobId);
+    }
+  });
 }
 
 // ── Auto-next episode ──────────────────────────────────────────────────────

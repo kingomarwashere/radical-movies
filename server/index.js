@@ -21,7 +21,7 @@ import { downloadTorrent, DOWNLOADS_DIR } from './torrent.js';
 import {
   seedboxConfigured, addTorrent, waitForTorrent, seedUntilDone,
   pullFileViaSftp, findVideoFile, getSeedboxSavePath, parallelSftpToR2,
-  remuxOnSeedbox, transcodeOnSeedbox, transcodeVideoOnSeedbox,
+  remuxOnSeedbox, transcodeOnSeedbox, transcodeVideoOnSeedbox, extractSubtitlesOnSeedbox,
   probeRemoteAudioCodec, probeRemoteFileAudio, probeRemoteCodecs,
   clearQbtCooldown, getQbtCooldownUntil, getActiveSeedboxOps,
   incSeedboxOps, decSeedboxOps, getSeedboxDisk, deleteSeedboxDir,
@@ -771,6 +771,19 @@ async function runPipeline(jobId) {
         trackBandwidth(remoteFileSize);
         // Seed until ratio ≥ 1.0 or 24h, then delete — fires in background
         if (torrentHash) seedUntilDone(torrentHash, job.title).catch(e => console.warn('[seedbox] seedUntilDone failed:', e.message));
+
+        // Extract embedded subtitles (fast demux, ~1-2s) — fires in background, updates job when done
+        const subPrefix = `movies/${jobId}/sub`;
+        extractSubtitlesOnSeedbox(remoteVideoPath, `${UPLOAD_URL}/upload`, UPLOAD_SECRET, subPrefix)
+          .then(tracks => {
+            if (!tracks.length) return;
+            const subtitleTracks = tracks.map(t => ({ ...t, url: getStreamUrl(t.key) }));
+            job.subtitleTracks = subtitleTracks;
+            saveJobs();
+            io.to(jobId).emit('job:update', sanitize(job));
+            console.log(`[subtitles] ${tracks.length} track(s) for ${job.title}: ${tracks.map(t => t.lang).join(', ')}`);
+          })
+          .catch(() => {});
 
         job.status    = 'ready';
         job.readyAt   = Date.now();

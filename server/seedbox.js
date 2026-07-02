@@ -1181,6 +1181,93 @@ export function transcodeVideoOnSeedbox(remotePath, fileSize, r2UploadUrl, r2Sec
     ['-c:v', 'libx264', '-crf', '20', '-preset', 'ultrafast', ...audioArgs], onProgress);
 }
 
+// Extract embedded subtitle streams from a video file on the seedbox.
+// Skips image-based subs (PGS/VOBSUB). Returns [{lang, label, key}] or [].
+export function extractSubtitlesOnSeedbox(remotePath, r2UploadUrl, r2Secret, r2KeyPrefix) {
+  const py = `
+import json, subprocess, sys, os
+from urllib.request import Request, urlopen
+from urllib.parse import quote
+
+FILE   = ${JSON.stringify(remotePath)}
+BASE   = ${JSON.stringify(r2UploadUrl)}
+SECRET = ${JSON.stringify(r2Secret)}
+PREFIX = ${JSON.stringify(r2KeyPrefix)}
+
+def upload(sub_key, data):
+    def api(action, extra='', method='GET', body=None, ct=None):
+        url = BASE + '?action=' + action + '&key=' + quote(sub_key, safe='') + extra
+        h = {'x-upload-secret': SECRET, 'User-Agent': 'curl/7.88.1'}
+        if ct: h['content-type'] = ct
+        with urlopen(Request(url, data=body, method=method, headers=h), timeout=60) as r:
+            return json.loads(r.read())
+    uid  = api('create', '&contentType=text/vtt', 'POST')['uploadId']
+    part = api('part', '&uploadId=' + uid + '&partNumber=1', 'PUT', data, 'text/vtt')
+    api('complete', '&uploadId=' + uid, 'POST',
+        json.dumps({'parts': [{'partNumber': 1, 'etag': part['etag']}]}).encode(),
+        'application/json')
+
+# Probe subtitle streams
+probe = subprocess.run(
+    ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+     '-show_streams', '-select_streams', 's', FILE],
+    capture_output=True, text=True, timeout=30
+)
+try: streams = json.loads(probe.stdout).get('streams', [])
+except: streams = []
+
+IMAGE_CODECS = {'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvdsub', 'pgssub', 'xsub'}
+tracks = []
+os.makedirs('/home/seedit4me/tmp', exist_ok=True)
+
+for i, s in enumerate(streams):
+    if s.get('codec_name', '') in IMAGE_CODECS:
+        continue
+    lang  = s.get('tags', {}).get('language', 'und')
+    title = s.get('tags', {}).get('title', '')
+    key   = PREFIX + '.' + lang + '.' + str(i) + '.vtt'
+    tmp   = '/home/seedit4me/tmp/sub_' + str(os.getpid()) + '_' + str(i) + '.vtt'
+    r = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', FILE,
+         '-map', '0:s:' + str(i), '-c:s', 'webvtt', '-y', tmp],
+        capture_output=True, timeout=60
+    )
+    if r.returncode != 0 or not os.path.exists(tmp): continue
+    try:
+        with open(tmp, 'rb') as f: data = f.read()
+        if len(data) > 20:
+            upload(key, data)
+            label = title if title else (lang.upper() if lang != 'und' else 'Subtitles')
+            tracks.append({'lang': lang, 'label': label, 'key': key})
+    except: pass
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+sys.stdout.write(json.dumps({'tracks': tracks}) + '\\n')
+`;
+
+  const pyB64 = Buffer.from(py).toString('base64');
+  return new Promise((resolve) => {
+    const conn = new SSH2Client();
+    conn.on('ready', () => {
+      conn.exec(`echo '${pyB64}' | base64 -d | python3`, (err, stream) => {
+        if (err) { conn.end(); return resolve([]); }
+        let out = '';
+        stream.stdout.on('data', d => { out += d.toString(); });
+        stream.on('close', () => {
+          conn.end();
+          try {
+            const line = out.trim().split('\n').pop();
+            resolve(JSON.parse(line).tracks || []);
+          } catch { resolve([]); }
+        });
+      });
+    });
+    conn.on('error', () => resolve([]));
+    conn.connect({ host: SFTP_HOST, port: SFTP_PORT, username: QB_USER, password: QB_PASS });
+  });
+}
+
 // Delete a directory on the seedbox via SSH — used after upload to free disk
 export function deleteSeedboxDir(dirPath) {
   return new Promise((resolve) => {
